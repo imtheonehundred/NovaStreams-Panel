@@ -1,16 +1,47 @@
 {
-  "name": "webapp",
+  "name": "novastreams-panel",
   "version": "1.0.0",
+  "description": "Open-source IPTV Restream Panel — MPD/HLS/RTMP → HLS with sub-second on-demand startup",
   "main": "server.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/imtheonehundred/NovaStreams-Panel"
+  },
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
-    "test": "curl http://localhost:3000"
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "verify:preset": "node scripts/verify-mpegts-preset.js",
+    "bootstrap-db": "node scripts/bootstrap-database.js"
   },
   "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "better-sqlite3": "^12.8.0",
+    "cookie": "^1.1.1",
+    "cookie-session": "^2.1.1",
     "cors": "^2.8.5",
+    "dotenv": "^17.3.1",
     "express": "^4.21.0",
+    "express-rate-limit": "^8.3.1",
+    "geoip-lite": "^2.0.1",
+    "helmet": "^8.1.0",
+    "ioredis": "^5.10.1",
+    "joi": "^18.1.1",
+    "multer": "^2.1.1",
+    "mysql2": "^3.20.0",
+    "node-cron": "^4.2.1",
     "node-fetch": "^2.7.0",
-    "uuid": "^11.1.0"
+    "ssh2": "^1.16.0",
+    "systeminformation": "^5.31.5",
+    "tree-kill": "^1.2.2",
+    "uuid": "^13.0.0",
+    "winston": "^3.19.0",
+    "ws": "^8.20.0"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "supertest": "^7.1.0"
   }
 }

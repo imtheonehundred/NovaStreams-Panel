@@ -1,0 +1,13 @@
+{
+  "name": "iptv-panel-remote-agent",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Posts health metrics to the IPTV panel /api/agent/heartbeat",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5"
+  }
+}

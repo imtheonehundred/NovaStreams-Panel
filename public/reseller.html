@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Reseller Panel</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <div id="app-login" class="login-wrapper" style="display:none">
+    <div class="login-box">
+      <h1>Reseller Panel</h1>
+      <form id="loginForm" autocomplete="off">
+        <div class="form-group"><input type="text" id="loginUser" placeholder="Username" required></div>
+        <div class="form-group"><input type="password" id="loginPass" placeholder="Password" required></div>
+        <button type="submit" class="btn btn-primary btn-block">Sign In</button>
+        <p id="loginError" class="text-danger" style="display:none"></p>
+      </form>
+    </div>
+  </div>
+
+  <div id="app-panel" style="display:none">
+    <aside class="sidebar">
+      <div class="sidebar-brand">Reseller Panel</div>
+      <nav class="sidebar-nav">
+        <a href="#" class="nav-link active" data-page="dashboard"><span class="nav-icon">&#9632;</span> Dashboard</a>
+        <a href="#" class="nav-link" data-page="lines"><span class="nav-icon">&#9679;</span> Lines</a>
+        <a href="#" class="nav-link" data-page="profile"><span class="nav-icon">&#128100;</span> Profile</a>
+      </nav>
+      <div class="sidebar-footer">
+        <a href="#" id="logoutBtn" class="nav-link"><span class="nav-icon">&#10148;</span> Logout</a>
+      </div>
+    </aside>
+
+    <main class="main-content">
+      <header class="topbar">
+        <button id="sidebarToggle" class="sidebar-toggle">&#9776;</button>
+        <div class="topbar-right">
+          <span id="topbarCredits" class="topbar-user" style="margin-right:12px"></span>
+          <span id="topbarUser" class="topbar-user"></span>
+        </div>
+      </header>
+
+      <div class="page-content">
+        <!-- DASHBOARD -->
+        <section class="page page-dashboard" id="page-dashboard">
+          <div class="dash-header">
+            <h2 class="dash-title" id="dashWelcome">Dashboard</h2>
+          </div>
+          <div class="dash-stats-row" id="dashStats"></div>
+        </section>
+
+        <!-- LINES -->
+        <section class="page" id="page-lines" style="display:none">
+          <div class="page-header">
+            <h2>Lines</h2>
+            <div class="page-actions">
+              <button class="btn btn-primary" onclick="RSL.openLineForm()">+ Add Line</button>
+            </div>
+          </div>
+          <div class="filter-bar">
+            <input type="text" class="form-control" placeholder="Search..." id="linesSearch">
+          </div>
+          <div class="table-responsive">
+            <table class="data-table" id="linesTable">
+              <thead><tr><th>ID</th><th>Username</th><th>Password</th><th>Status</th><th>Exp Date</th><th>Days Left</th><th>Connections</th><th>Actions</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- LINE FORM -->
+        <section class="page" id="page-line-form" style="display:none">
+          <div class="page-header">
+            <h2 id="lineFormTitle">Add Line</h2>
+            <div class="page-actions">
+              <button class="btn btn-secondary" onclick="RSL.navigateTo('lines')">Back</button>
+              <button class="btn btn-primary" onclick="RSL.saveLine()">Save</button>
+            </div>
+          </div>
+          <input type="hidden" id="lineFormId">
+          <div class="wizard-panel active">
+            <div class="form-row"><label>Username</label><div class="form-input"><input type="text" id="lineUsername" class="form-control"></div></div>
+            <div class="form-row"><label>Password</label><div class="form-input"><input type="text" id="linePassword" class="form-control"></div></div>
+            <div class="form-row"><label>Package <span style="color:#f85149">*</span></label><div class="form-input"><select id="linePackage" class="form-control"><option value="">-- Select Package --</option></select></div></div>
+            <div id="linePackageSummary" class="package-summary" style="display:none">
+              <div class="package-summary-inner">
+                <span class="pkg-detail"><strong>Max Connections:</strong> <span id="pkgSumConn">-</span></span>
+                <span class="pkg-detail"><strong>Duration:</strong> <span id="pkgSumDuration">-</span></span>
+                <span class="pkg-detail"><strong>Bouquets:</strong> <span id="pkgSumBouquets">-</span></span>
+                <span class="pkg-detail"><strong>Outputs:</strong> <span id="pkgSumOutputs">-</span></span>
+                <span class="pkg-detail"><strong>Credits Cost:</strong> <span id="pkgSumCredits">-</span></span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- PROFILE -->
+        <section class="page" id="page-profile" style="display:none">
+          <div class="page-header"><h2>Profile</h2></div>
+          <div class="card">
+            <div class="card-body" id="profileInfo"></div>
+          </div>
+          <div class="card mt-3">
+            <div class="card-header">Credits History</div>
+            <div class="card-body">
+              <table class="data-table" id="creditLogsTable">
+                <thead><tr><th>Amount</th><th>Reason</th><th>Date</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <!-- PLAYLIST DOWNLOAD MODAL -->
+  <div class="modal-overlay" id="playlistModal" style="display:none">
+    <div class="modal-box" style="max-width:600px">
+      <div class="modal-header">
+        <h3>Download Playlist</h3>
+        <button class="modal-close" onclick="RSL.closePlaylistModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="playlist-info-group">
+          <label>Server URL</label>
+          <div class="playlist-url-row">
+            <input type="text" id="plServerUrl" class="form-control" readonly>
+            <button class="btn btn-xs btn-secondary" onclick="RSL.copyField('plServerUrl')">Copy</button>
+          </div>
+        </div>
+        <div class="playlist-info-group">
+          <label>Username</label>
+          <div class="playlist-url-row">
+            <input type="text" id="plUsername" class="form-control" readonly>
+            <button class="btn btn-xs btn-secondary" onclick="RSL.copyField('plUsername')">Copy</button>
+          </div>
+        </div>
+        <div class="playlist-info-group">
+          <label>Password</label>
+          <div class="playlist-url-row">
+            <input type="text" id="plPassword" class="form-control" readonly>
+            <button class="btn btn-xs btn-secondary" onclick="RSL.copyField('plPassword')">Copy</button>
+          </div>
+        </div>
+        <hr style="border-color:#30363d;margin:12px 0">
+        <div class="playlist-info-group">
+          <label>M3U Playlist URL</label>
+          <div class="playlist-url-row">
+            <input type="text" id="plM3uUrl" class="form-control" readonly>
+            <button class="btn btn-xs btn-secondary" onclick="RSL.copyField('plM3uUrl')">Copy</button>
+          </div>
+        </div>
+        <div class="playlist-info-group">
+          <label>EPG URL</label>
+          <div class="playlist-url-row">
+            <input type="text" id="plEpgUrl" class="form-control" readonly>
+            <button class="btn btn-xs btn-secondary" onclick="RSL.copyField('plEpgUrl')">Copy</button>
+          </div>
+        </div>
+        <div class="playlist-info-group">
+          <label>Xtream API URL</label>
+          <div class="playlist-url-row">
+            <input type="text" id="plXtreamUrl" class="form-control" readonly>
+            <button class="btn btn-xs btn-secondary" onclick="RSL.copyField('plXtreamUrl')">Copy</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast-container"></div>
+  <script src="/js/reseller-app.js"></script>
+</body>
+</html>

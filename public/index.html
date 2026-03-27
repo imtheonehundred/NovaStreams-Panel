@@ -1,203 +1,1778 @@
 <!DOCTYPE html>
-<html lang="ar" dir="rtl">
+<html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MPD to HLS Restream Panel</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet">
-    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
-    <link href="/css/style.css" rel="stylesheet">
-    <script>
-      tailwind.config = {
-        theme: {
-          extend: {
-            colors: {
-              dark: { 50:'#f8fafc',100:'#f1f5f9',200:'#e2e8f0',300:'#cbd5e1',400:'#94a3b8',500:'#64748b',600:'#475569',700:'#334155',800:'#1e293b',900:'#0f172a',950:'#020617' },
-              accent: { 50:'#eff6ff',100:'#dbeafe',200:'#bfdbfe',300:'#93c5fd',400:'#60a5fa',500:'#3b82f6',600:'#2563eb',700:'#1d4ed8' },
-              success: '#10b981',
-              danger: '#ef4444',
-              warning: '#f59e0b',
-            }
-          }
-        }
-      }
-    </script>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IPTV Panel</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/style.css">
+  <link rel="stylesheet" href="/css/premium.css">
 </head>
-<body class="bg-dark-950 text-white min-h-screen">
-    <!-- Top Navbar -->
-    <nav class="bg-dark-900 border-b border-dark-700 px-6 py-3 flex items-center justify-between sticky top-0 z-50">
-        <div class="flex items-center gap-3">
-            <div class="w-10 h-10 bg-gradient-to-br from-accent-500 to-accent-700 rounded-lg flex items-center justify-center">
-                <i class="fas fa-satellite-dish text-white text-lg"></i>
-            </div>
-            <div>
-                <h1 class="text-lg font-bold text-white">Restream Panel</h1>
-                <p class="text-xs text-dark-400">MPD &rarr; HLS Converter</p>
-            </div>
+<body>
+  <div id="app-login" class="login-wrapper" style="display:none">
+    <div class="login-box">
+      <div class="login-logo">
+        <div class="login-logo-icon">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
         </div>
-        <div class="flex items-center gap-4">
-            <div id="statsBar" class="flex gap-4 text-sm">
-                <span class="text-dark-400"><i class="fas fa-tv ml-1"></i> القنوات: <span id="totalChannels" class="text-white">0</span></span>
-                <span class="text-dark-400"><i class="fas fa-play-circle ml-1 text-success"></i> نشطة: <span id="activeChannels" class="text-success">0</span></span>
-            </div>
-            <button onclick="openAddModal()" class="bg-accent-600 hover:bg-accent-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2">
-                <i class="fas fa-plus"></i> اضافة قناة
-            </button>
+        <div>
+          <div class="login-logo-text">IPTV Panel</div>
         </div>
-    </nav>
-
-    <!-- Main Content -->
-    <div class="p-6">
-        <!-- Empty State -->
-        <div id="emptyState" class="hidden flex flex-col items-center justify-center py-20">
-            <div class="w-24 h-24 bg-dark-800 rounded-full flex items-center justify-center mb-6">
-                <i class="fas fa-satellite-dish text-4xl text-dark-500"></i>
-            </div>
-            <h2 class="text-xl font-semibold text-dark-300 mb-2">لا توجد قنوات</h2>
-            <p class="text-dark-500 mb-6">اضف اول قناة لبدء البث</p>
-            <button onclick="openAddModal()" class="bg-accent-600 hover:bg-accent-700 text-white px-6 py-3 rounded-lg font-medium transition-all">
-                <i class="fas fa-plus ml-2"></i> اضافة قناة جديدة
-            </button>
-        </div>
-
-        <!-- Channels Grid -->
-        <div id="channelsGrid" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-        </div>
+      </div>
+      <form id="loginForm" autocomplete="off">
+        <div class="form-group"><input type="text" id="loginUser" placeholder="Username" required></div>
+        <div class="form-group"><input type="password" id="loginPass" placeholder="Password" required></div>
+        <button type="submit" class="btn btn-primary btn-block">Sign In</button>
+        <p id="loginError" class="text-danger" style="display:none"></p>
+      </form>
     </div>
+  </div>
 
-    <!-- Add/Edit Channel Modal -->
-    <div id="channelModal" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
-        <div class="bg-dark-900 rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto border border-dark-700 shadow-2xl">
-            <div class="p-6 border-b border-dark-700 flex items-center justify-between">
-                <h2 id="modalTitle" class="text-xl font-bold">
-                    <i class="fas fa-plus-circle text-accent-500 ml-2"></i>
-                    اضافة قناة جديدة
-                </h2>
-                <button onclick="closeModal()" class="text-dark-400 hover:text-white text-xl"><i class="fas fa-times"></i></button>
+  <div id="app-panel" style="display:none">
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <div class="brand-icon">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        </div>
+        <div>
+          <div class="brand-name">IPTV Panel</div>
+          <div class="brand-version">v1.0 · Pro</div>
+        </div>
+      </div>
+      <nav class="sidebar-nav">
+        <a href="#" class="nav-link active" data-page="dashboard">
+          <span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg></span>
+          Dashboard
+        </a>
+
+        <div class="nav-group collapsible">
+          <div class="nav-group-title" onclick="this.parentElement.classList.toggle('collapsed')">
+            <span class="nav-chevron"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></span>
+            Users
+          </div>
+          <div class="nav-group-items">
+            <a href="#" class="nav-link" data-page="lines"><span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span> Lines</a>
+            <a href="#" class="nav-link" data-page="resellers"><span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg></span> Resellers</a>
+          </div>
+        </div>
+
+        <div class="nav-group collapsible">
+          <div class="nav-group-title" onclick="this.parentElement.classList.toggle('collapsed')">
+            <span class="nav-chevron"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></span>
+            Content
+          </div>
+          <div class="nav-group-items">
+            <a href="#" class="nav-link" data-page="streams"><span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg></span> Live Streams</a>
+            <a href="#" class="nav-link" data-page="drm-streams"><span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span> DRM Streams</a>
+            <a href="#" class="nav-link" data-page="movies"><span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="7" x2="7" y2="7"/><line x1="2" y1="17" x2="7" y2="17"/><line x1="17" y1="17" x2="22" y2="17"/><line x1="17" y1="7" x2="22" y2="7"/></svg></span> Movies</a>
+            <a href="#" class="nav-link" data-page="series"><span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="15" rx="2" ry="2"/><polyline points="17 2 12 7 7 2"/></svg></span> Series</a>
+            <a href="#" class="nav-link" data-page="episodes"><span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg></span> Episodes</a>
+          </div>
+        </div>
+
+        <div class="nav-group collapsible">
+          <div class="nav-group-title" onclick="this.parentElement.classList.toggle('collapsed')">
+            <span class="nav-chevron"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></span>
+            Import
+          </div>
+          <div class="nav-group-items">
+            <a href="#" class="nav-link" data-page="providers"><span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></span> Providers</a>
+            <a href="#" class="nav-link" data-page="import-content"><span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span> Import Content</a>
+          </div>
+        </div>
+
+        <div class="nav-group collapsible">
+          <div class="nav-group-title" onclick="this.parentElement.classList.toggle('collapsed')">
+            <span class="nav-chevron"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></span>
+            Manage
+          </div>
+          <div class="nav-group-items">
+            <a href="#" class="nav-link" data-page="categories-channels"><span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg></span> Channel categories</a>
+            <a href="#" class="nav-link" data-page="categories-movies"><span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg></span> Movie categories</a>
+            <a href="#" class="nav-link" data-page="categories-series"><span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg></span> Series categories</a>
+            <a href="#" class="nav-link" data-page="bouquets"><span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></span> Bouquets</a>
+            <a href="#" class="nav-link" data-page="packages"><span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg></span> Packages</a>
+            <a href="#" class="nav-link" data-page="transcode-profiles"><span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/></svg></span> Transcode Profiles</a>
+          </div>
+        </div>
+
+        <div class="nav-group collapsible">
+          <div class="nav-group-title" onclick="this.parentElement.classList.toggle('collapsed')">
+            <span class="nav-chevron"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></span>
+            System
+          </div>
+          <div class="nav-group-items">
+            <a href="#" class="nav-link" data-page="epg"><span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></span> EPG Sources</a>
+            <a href="#" class="nav-link" data-page="users"><span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span> Panel Users</a>
+            <a href="#" class="nav-link" data-page="access-codes"><span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span> Access Codes</a>
+            <a href="#" class="nav-link" data-page="db-manager"><span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg></span> Database Manager</a>
+            <a href="#" class="nav-link" data-page="servers"><span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg></span> Servers</a>
+            <a href="#" class="nav-link" data-page="settings"><span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/></svg></span> Settings</a>
+            <a href="#" class="nav-link" data-page="security"><span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span> Security</a>
+            <a href="#" class="nav-link" data-page="logs"><span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg></span> Logs</a>
+          </div>
+        </div>
+      </nav>
+      <div class="sidebar-footer">
+        <a href="#" id="logoutBtn" class="nav-link"><span class="nav-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></span> Logout</a>
+      </div>
+    </aside>
+
+    <main class="main-content">
+      <header class="topbar">
+        <button id="sidebarToggle" class="sidebar-toggle"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button>
+        <div class="topbar-right">
+          <span id="topbarUser" class="topbar-user"></span>
+        </div>
+      </header>
+
+      <div class="page-content">
+        <!-- DASHBOARD -->
+        <section class="page page-dashboard" id="page-dashboard">
+          <div class="dash-header">
+            <h2 class="dash-title">Dashboard</h2>
+            <select id="dashServerSelect" class="form-control dash-server-select">
+              <option value="">All Servers</option>
+            </select>
+          </div>
+          <div class="dash-stats-row" id="dashStats"></div>
+          <div class="dash-body-row">
+            <div class="dash-streams-panel">
+              <div class="dash-panel-header">
+                <span>Active Streams</span>
+                <span id="dashStreamsCount" style="font-weight:400;text-transform:none;letter-spacing:0"></span>
+              </div>
+              <div class="dash-streams-list" id="dashActiveStreams"></div>
             </div>
-            <form id="channelForm" class="p-6 space-y-5" onsubmit="saveChannel(event)">
-                <input type="hidden" id="editId" value="">
-                
-                <!-- Channel Name -->
-                <div>
-                    <label class="block text-sm font-medium text-dark-300 mb-2">
-                        <i class="fas fa-tag ml-1"></i> اسم القناة
-                    </label>
-                    <input type="text" id="channelName" required placeholder="مثال: MBC 2" 
-                        class="w-full bg-dark-800 border border-dark-600 rounded-lg px-4 py-3 text-white placeholder-dark-500 focus:border-accent-500 focus:ring-1 focus:ring-accent-500 outline-none">
-                </div>
+            <div class="dash-info-panel">
+              <div class="dash-panel-header"><span>System</span></div>
+              <div class="dash-meters" id="dashMeters"></div>
+              <div class="dash-panel-header" style="margin-top:0"><span>Active Users</span></div>
+              <div class="dash-active-users" id="dashActiveUsers"></div>
+            </div>
+          </div>
+        </section>
 
-                <!-- Type -->
-                <div>
-                    <label class="block text-sm font-medium text-dark-300 mb-2">
-                        <i class="fas fa-shield-alt ml-1"></i> نوع التشفير
-                    </label>
-                    <select id="channelType" class="w-full bg-dark-800 border border-dark-600 rounded-lg px-4 py-3 text-white focus:border-accent-500 outline-none">
-                        <option value="WIDEVINE">Widevine</option>
-                        <option value="CLEARKEY">ClearKey</option>
-                        <option value="PLAYREADY">PlayReady</option>
+        <!-- LINES -->
+        <section class="page" id="page-lines" style="display:none">
+          <div class="page-header">
+            <h2>Lines</h2>
+            <div class="page-actions">
+              <button class="btn btn-primary" onclick="APP.openLineForm()">+ Add Line</button>
+            </div>
+          </div>
+          <div class="filter-bar">
+            <input type="text" class="form-control" placeholder="Search..." id="linesSearch">
+            <select class="form-control" id="linesStatusFilter">
+              <option value="">All Status</option>
+              <option value="active">Active</option>
+              <option value="banned">Banned</option>
+              <option value="expired">Expired</option>
+              <option value="disabled">Disabled</option>
+            </select>
+          </div>
+          <div class="table-responsive">
+            <table class="data-table" id="linesTable">
+              <thead><tr><th>ID</th><th>Username</th><th>Password</th><th>Owner</th><th>Status</th><th>Exp Date</th><th>Days Left</th><th>Connections</th><th>Actions</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div id="linesPagination" class="pagination-bar"></div>
+        </section>
+
+        <!-- LINE FORM -->
+        <section class="page" id="page-line-form" style="display:none">
+          <div class="page-header">
+            <h2 id="lineFormTitle">Add Line</h2>
+            <div class="page-actions">
+              <button class="btn btn-secondary" onclick="APP.navigateTo('lines')">Back</button>
+              <button class="btn btn-primary" onclick="APP.saveLine()">Save</button>
+            </div>
+          </div>
+          <div class="wizard-tabs">
+            <button class="wizard-tab active" data-tab="line-details">Details</button>
+            <button class="wizard-tab" data-tab="line-advanced">Advanced</button>
+          </div>
+          <input type="hidden" id="lineFormId">
+          <div class="wizard-panel active" id="tab-line-details">
+            <div class="form-row"><label>Username</label><div class="form-input"><input type="text" id="lineUsername" class="form-control"></div></div>
+            <div class="form-row"><label>Password</label><div class="form-input"><input type="text" id="linePassword" class="form-control"></div></div>
+            <div class="form-row"><label>Owner / Reseller</label><div class="form-input"><select id="lineOwner" class="form-control"><option value="0">Admin</option></select></div></div>
+            <div class="form-row"><label>Package <span style="color:#f85149">*</span></label><div class="form-input"><select id="linePackage" class="form-control"><option value="">-- Select Package --</option></select></div></div>
+            <div id="linePackageSummary" class="package-summary" style="display:none">
+              <div class="package-summary-inner">
+                <span class="pkg-detail"><strong>Max Connections:</strong> <span id="pkgSumConn">-</span></span>
+                <span class="pkg-detail"><strong>Duration:</strong> <span id="pkgSumDuration">-</span></span>
+                <span class="pkg-detail"><strong>Bouquets:</strong> <span id="pkgSumBouquets">-</span></span>
+                <span class="pkg-detail"><strong>Outputs:</strong> <span id="pkgSumOutputs">-</span></span>
+              </div>
+            </div>
+            <div class="form-row"><label>Enabled</label><div class="form-input"><select id="lineEnabled" class="form-control"><option value="1">Yes</option><option value="0">No</option></select></div></div>
+          </div>
+          <div class="wizard-panel" id="tab-line-advanced">
+            <div class="form-row"><label>Allowed IPs</label><div class="form-input"><textarea id="lineAllowedIps" class="form-control" rows="3" placeholder="One per line or empty for all"></textarea></div></div>
+            <div class="form-row"><label>Allowed User Agents</label><div class="form-input"><textarea id="lineAllowedUAs" class="form-control" rows="3" placeholder="One per line or empty for all"></textarea></div></div>
+          </div>
+        </section>
+
+        <!-- MOVIES -->
+        <section class="page" id="page-movies" style="display:none">
+          <div class="page-header">
+            <h2>Movies</h2>
+            <div class="page-actions">
+              <button class="btn btn-primary" onclick="APP.openMovieForm()">+ Add Movie</button>
+              <button class="btn btn-secondary" onclick="APP.navigateTo('movie-import')">Import</button>
+            </div>
+          </div>
+          <div class="filter-bar">
+            <input type="text" class="form-control" placeholder="Search movies..." id="moviesSearch">
+            <select class="form-control" id="moviesCatFilter"><option value="">All Categories</option></select>
+            <select class="form-control" id="moviesSortOrder" title="Sort order">
+              <option value="id_desc">Newest first</option>
+              <option value="id_asc">Oldest first</option>
+            </select>
+          </div>
+          <div class="table-responsive">
+            <table class="data-table" id="moviesTable">
+              <thead><tr><th width="50">ID</th><th width="60">Image</th><th>Name</th><th>Category</th><th>Year</th><th>Rating</th><th>TMDb</th><th width="140">Actions</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div id="moviesPagination" class="pagination-bar"></div>
+        </section>
+
+        <!-- MOVIE MODAL (XC-STYLE) -->
+        <div class="modal-overlay" id="movieModal" style="display:none">
+          <div class="modal-box modal-xl">
+            <div class="modal-header">
+              <h3 id="movieFormTitle">Add Movie</h3>
+              <div class="modal-header-actions">
+                <button class="btn btn-xs btn-primary" onclick="APP.saveMovie()" title="Save"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px;vertical-align:middle;margin-right:4px"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>Save</button>
+                <button class="modal-close" onclick="APP.closeMovieModal()">&times;</button>
+              </div>
+            </div>
+            <div class="modal-body" style="padding:0">
+              <input type="hidden" id="movieFormId">
+              <!-- XC-style tab pills -->
+              <div class="xc-tabs">
+                <button class="xc-tab active" data-mtab="movie-details"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px;vertical-align:middle;margin-right:4px"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>Details</button>
+                <button class="xc-tab" data-mtab="movie-info"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px;vertical-align:middle;margin-right:4px"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>Information</button>
+                <button class="xc-tab" data-mtab="movie-advanced"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px;vertical-align:middle;margin-right:4px"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93l-1.41 1.41M4.93 4.93l1.41 1.41M4.93 19.07l1.41-1.41M19.07 19.07l-1.41-1.41M12 2v2M12 20v2M2 12h2M20 12h2"/></svg>Advanced</button>
+                <button class="xc-tab" data-mtab="movie-streaming"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px;vertical-align:middle;margin-right:4px"><polygon points="5 3 19 12 5 21 5 3"/></svg>Streaming</button>
+              </div>
+              <!-- DETAILS TAB -->
+              <div class="xc-tab-panel active" id="mtab-movie-details">
+                <div class="form-row">
+                  <label>Movie Name</label>
+                  <div class="form-input" style="flex:2"><input type="text" id="movieName" class="form-control"></div>
+                  <label style="width:60px;min-width:60px">Year</label>
+                  <div class="form-input" style="flex:0 0 100px"><input type="number" id="movieYear" class="form-control"></div>
+                </div>
+                <div class="form-row"><label>Movie Path / URL</label>
+                  <div class="form-input">
+                    <div class="input-with-btn">
+                      <input type="text" id="movieMainUrl" class="form-control" placeholder="http://source-server.com/movie.mp4">
+                      <button class="btn btn-xs btn-secondary" onclick="APP.copyMovieUrl()" title="Copy URL"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+                    </div>
+                  </div>
+                </div>
+                <div class="form-row"><label>Additional Sources</label>
+                  <div class="form-input">
+                    <div id="movieSourceUrls"></div>
+                    <button class="btn btn-xs btn-secondary mt-1" onclick="APP.addMovieSourceRow()">+ Add Source</button>
+                  </div>
+                </div>
+                <div class="form-row"><label>Categories</label>
+                  <div class="form-input">
+                    <div class="tag-select" id="movieCategoryTags"></div>
+                    <select id="movieCategory" class="form-control mt-1" onchange="APP.addMovieCatTag(this)">
+                      <option value="">Select category...</option>
                     </select>
+                  </div>
                 </div>
-
-                <!-- MPD URL -->
-                <div>
-                    <label class="block text-sm font-medium text-dark-300 mb-2">
-                        <i class="fas fa-link ml-1"></i> رابط MPD
-                    </label>
-                    <textarea id="mpdUrl" required rows="2" placeholder="https://example.com/live/channel/index.mpd"
-                        class="w-full bg-dark-800 border border-dark-600 rounded-lg px-4 py-3 text-white placeholder-dark-500 focus:border-accent-500 focus:ring-1 focus:ring-accent-500 outline-none font-mono text-sm resize-none"></textarea>
+                <div class="form-row"><label>Bouquets</label>
+                  <div class="form-input">
+                    <div class="tag-select" id="movieBouquetTags"></div>
+                    <select id="movieBouquet" class="form-control mt-1" onchange="APP.addMovieBqTag(this)">
+                      <option value="">Select bouquet...</option>
+                    </select>
+                  </div>
                 </div>
-
-                <!-- PSSH -->
-                <div>
-                    <label class="block text-sm font-medium text-dark-300 mb-2">
-                        <i class="fas fa-key ml-1"></i> PSSH Data <span class="text-dark-500 text-xs">(اختياري)</span>
-                    </label>
-                    <textarea id="psshData" rows="2" placeholder="AAAATXBzc2gA..."
-                        class="w-full bg-dark-800 border border-dark-600 rounded-lg px-4 py-3 text-white placeholder-dark-500 focus:border-accent-500 focus:ring-1 focus:ring-accent-500 outline-none font-mono text-sm resize-none"></textarea>
-                </div>
-
-                <!-- KID & Key -->
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                        <label class="block text-sm font-medium text-dark-300 mb-2">
-                            <i class="fas fa-fingerprint ml-1"></i> KID
-                        </label>
-                        <input type="text" id="channelKid" required placeholder="e3ce77324a3d4fa2..."
-                            class="w-full bg-dark-800 border border-dark-600 rounded-lg px-4 py-3 text-white placeholder-dark-500 focus:border-accent-500 focus:ring-1 focus:ring-accent-500 outline-none font-mono text-sm">
+                <div class="form-row">
+                  <label>TMDb Search</label>
+                  <div class="form-input">
+                    <div class="tmdb-search-wrap">
+                      <input type="text" id="movieTmdbSearch" class="form-control" placeholder="Search TMDb for movie...">
+                      <div id="movieTmdbResults" class="tmdb-dropdown" style="display:none"></div>
                     </div>
-                    <div>
-                        <label class="block text-sm font-medium text-dark-300 mb-2">
-                            <i class="fas fa-lock ml-1"></i> Key
-                        </label>
-                        <input type="text" id="channelKey" required placeholder="17774f82a3b9e33e..."
-                            class="w-full bg-dark-800 border border-dark-600 rounded-lg px-4 py-3 text-white placeholder-dark-500 focus:border-accent-500 focus:ring-1 focus:ring-accent-500 outline-none font-mono text-sm">
+                  </div>
+                </div>
+                <div class="xc-tab-footer">
+                  <div></div>
+                  <button class="btn btn-primary" onclick="APP.movieTabNext('movie-info')">Next &raquo;</button>
+                </div>
+              </div>
+              <!-- INFORMATION TAB -->
+              <div class="xc-tab-panel" id="mtab-movie-info">
+                <div class="form-row"><label>Poster URL</label><div class="form-input"><input type="text" id="moviePoster" class="form-control"><div class="img-preview" id="moviePosterPreview"></div></div></div>
+                <div class="form-row"><label>Backdrop URL</label><div class="form-input"><input type="text" id="movieBackdrop" class="form-control"><div class="img-preview" id="movieBackdropPreview"></div></div></div>
+                <div class="form-row"><label>Plot</label><div class="form-input"><textarea id="moviePlot" class="form-control" rows="3"></textarea></div></div>
+                <div class="form-row"><label>Cast</label><div class="form-input"><input type="text" id="movieCast" class="form-control"></div></div>
+                <div class="form-row"><label>Director</label><div class="form-input"><input type="text" id="movieDirector" class="form-control"></div></div>
+                <div class="form-row"><label>Genre</label><div class="form-input"><input type="text" id="movieGenre" class="form-control"></div></div>
+                <div class="form-row"><label>Release Date</label><div class="form-input"><input type="text" id="movieReleaseDate" class="form-control" placeholder="YYYY-MM-DD"></div></div>
+                <div class="form-row"><label>Duration</label><div class="form-input"><input type="text" id="movieDuration" class="form-control" placeholder="1h 30m"></div></div>
+                <div class="form-row"><label>Rating (0-10)</label><div class="form-input"><input type="number" id="movieRating" class="form-control" min="0" max="10" step="0.1"></div></div>
+                <div class="form-row"><label>YouTube Trailer</label><div class="form-input"><input type="text" id="movieTrailer" class="form-control" placeholder="https://youtube.com/watch?v=..."></div></div>
+                <div class="form-row"><label>Country</label><div class="form-input"><input type="text" id="movieCountry" class="form-control"></div></div>
+                <div class="xc-tab-footer">
+                  <button class="btn btn-warning" onclick="APP.movieTabNext('movie-details')">&laquo; Previous</button>
+                  <button class="btn btn-primary" onclick="APP.movieTabNext('movie-advanced')">Next &raquo;</button>
+                </div>
+              </div>
+              <!-- ADVANCED TAB -->
+              <div class="xc-tab-panel" id="mtab-movie-advanced">
+                <div class="form-row"><label>Subtitle Location</label>
+                  <div class="form-input">
+                    <div id="movieSubtitles"></div>
+                    <button class="btn btn-xs btn-secondary mt-1" onclick="APP.addSubtitleRow()">+ Add Subtitle</button>
+                  </div>
+                </div>
+                <div class="form-row"><label>Target Container</label><div class="form-input">
+                  <select id="movieExtension" class="form-control"><option>mp4</option><option>mkv</option><option>avi</option><option>ts</option><option>m3u8</option></select>
+                </div></div>
+                <div class="form-row"><label>TMDb ID</label><div class="form-input"><input type="number" id="movieTmdbId" class="form-control" readonly></div></div>
+                <div class="xc-tab-footer">
+                  <button class="btn btn-warning" onclick="APP.movieTabNext('movie-info')">&laquo; Previous</button>
+                  <button class="btn btn-primary" onclick="APP.movieTabNext('movie-streaming')">Next &raquo;</button>
+                </div>
+              </div>
+              <!-- STREAMING TAB -->
+              <div class="xc-tab-panel" id="mtab-movie-streaming">
+                <div class="form-row"><label>Streaming Mode</label>
+                  <div class="form-input">
+                    <div class="status-indicator">
+                      <span class="badge badge-success">Proxy Active</span>
+                      <p class="text-muted mt-1" style="font-size:.8rem;color:#8b949e">All movies are streamed through your server. Source URLs are never exposed to customers.</p>
                     </div>
+                  </div>
                 </div>
-
-                <!-- Custom Headers -->
-                <div>
-                    <label class="block text-sm font-medium text-dark-300 mb-2">
-                        <i class="fas fa-code ml-1"></i> Custom Headers <span class="text-dark-500 text-xs">(JSON)</span>
-                    </label>
-                    <textarea id="customHeaders" rows="5" placeholder='{
-  "Origin": "https://example.com",
-  "Referer": "https://example.com/",
-  "User-Agent": "Mozilla/5.0..."
-}'
-                        class="w-full bg-dark-800 border border-dark-600 rounded-lg px-4 py-3 text-white placeholder-dark-500 focus:border-accent-500 focus:ring-1 focus:ring-accent-500 outline-none font-mono text-sm resize-none"></textarea>
+                <div class="form-row"><label>Server Status</label>
+                  <div class="form-input">
+                    <span class="badge badge-success"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" style="width:10px;height:10px;vertical-align:middle;margin-right:5px"><circle cx="12" cy="12" r="10"/></svg>Active</span>
+                    <span style="margin-left:8px;font-size:.85rem;color:#8b949e">Main Server</span>
+                  </div>
                 </div>
-
-                <!-- Buttons -->
-                <div class="flex gap-3 pt-2">
-                    <button type="submit" class="flex-1 bg-accent-600 hover:bg-accent-700 text-white py-3 rounded-lg font-medium transition-all flex items-center justify-center gap-2">
-                        <i class="fas fa-save"></i> <span id="saveBtn">حفظ القناة</span>
-                    </button>
-                    <button type="button" onclick="closeModal()" class="px-6 bg-dark-700 hover:bg-dark-600 text-white py-3 rounded-lg font-medium transition-all">
-                        الغاء
-                    </button>
+                <div class="form-row"><label>Stream server (playlist URL)</label><div class="form-input">
+                  <select id="movieStreamServer" class="form-control" style="max-width:360px">
+                    <option value="0">Use line / default</option>
+                  </select>
+                  <p class="text-muted mt-1" style="font-size:.72rem;color:#8b949e;margin:6px 0 0">Playlist URLs for this movie use this server’s public base when set.</p>
+                </div></div>
+                <div class="xc-tab-footer">
+                  <button class="btn btn-warning" onclick="APP.movieTabNext('movie-advanced')">&laquo; Previous</button>
+                  <button class="btn btn-primary" onclick="APP.saveMovie()">Save</button>
                 </div>
-            </form>
-        </div>
-    </div>
-
-    <!-- Player Modal -->
-    <div id="playerModal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
-        <div class="bg-dark-900 rounded-2xl w-full max-w-4xl border border-dark-700 shadow-2xl">
-            <div class="p-4 border-b border-dark-700 flex items-center justify-between">
-                <h2 id="playerTitle" class="text-lg font-bold"><i class="fas fa-play-circle text-accent-500 ml-2"></i> المشغل</h2>
-                <button onclick="closePlayer()" class="text-dark-400 hover:text-white text-xl"><i class="fas fa-times"></i></button>
+              </div>
             </div>
-            <div class="p-4">
-                <video id="hlsPlayer" controls class="w-full rounded-lg bg-black" style="max-height: 70vh;"></video>
-                <div id="playerHlsUrl" class="mt-3 p-3 bg-dark-800 rounded-lg flex items-center justify-between">
-                    <code class="text-sm text-accent-400 font-mono truncate" id="playerUrlText"></code>
-                    <button onclick="copyHlsUrl()" class="text-dark-400 hover:text-white mr-3"><i class="fas fa-copy"></i></button>
+          </div>
+        </div>
+
+        <!-- MOVIE IMPORT (XC-STYLE) -->
+        <section class="page" id="page-movie-import" style="display:none">
+          <div class="page-header">
+            <h2>Import Movies</h2>
+            <div class="page-actions">
+              <button class="btn btn-primary" onclick="APP.openMovieForm()">Add Single</button>
+              <button class="btn btn-secondary" onclick="APP.navigateTo('movies')">Back</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-body" style="padding:0">
+              <p class="import-hint">Importing Movies using this method will parse your M3U or folder and push the individual entries. If you have category and bouquet allocation set up, they will be used here too.</p>
+              <div class="wizard-tabs">
+                <button class="wizard-tab active" data-tab="movieimp-details">Details</button>
+                <button class="wizard-tab" data-tab="movieimp-advanced">Advanced</button>
+                <button class="wizard-tab" data-tab="movieimp-server">Server</button>
+              </div>
+              <div class="wizard-panel active" id="tab-movieimp-details" style="padding:20px">
+                <div class="form-row"><label>M3U File</label>
+                  <div class="form-input">
+                    <input type="file" id="movieImportFile" class="form-control file-input" accept=".m3u,.m3u8,.txt">
+                  </div>
                 </div>
+                <div class="form-row"><label>Or Paste M3U</label>
+                  <div class="form-input"><textarea id="movieImportM3u" class="form-control" rows="6" placeholder="Paste M3U content here..."></textarea></div>
+                </div>
+                <div class="form-row"><label>Fallback Categories</label>
+                  <div class="form-input"><select id="movieImportCat" class="form-control"><option value="">None</option></select></div>
+                </div>
+                <div class="form-row"><label>Fallback Bouquets</label>
+                  <div class="form-input"><select id="movieImportBq" class="form-control"><option value="">None</option></select></div>
+                </div>
+                <div class="xc-tab-footer">
+                  <div></div>
+                  <button class="btn btn-primary" onclick="document.querySelector('[data-tab=movieimp-advanced]').click()">Next &raquo;</button>
+                </div>
+              </div>
+              <div class="wizard-panel" id="tab-movieimp-advanced" style="padding:20px">
+                <div class="form-row"><label>Disable TMDb</label>
+                  <div class="form-input"><label class="toggle"><input type="checkbox" id="movieImportNoTmdb"><span class="toggle-slider"></span></label></div>
+                </div>
+                <div class="form-row"><label>Ignore No Match</label>
+                  <div class="form-input"><label class="toggle"><input type="checkbox" id="movieImportIgnoreNoMatch"><span class="toggle-slider"></span></label></div>
+                </div>
+                <div class="xc-tab-footer">
+                  <button class="btn btn-warning" onclick="document.querySelector('[data-tab=movieimp-details]').click()">&laquo; Previous</button>
+                  <button class="btn btn-primary" onclick="document.querySelector('[data-tab=movieimp-server]').click()">Next &raquo;</button>
+                </div>
+              </div>
+              <div class="wizard-panel" id="tab-movieimp-server" style="padding:20px">
+                <div class="form-row"><label>Target Server</label>
+                  <div class="form-input">
+                    <span class="badge badge-success">Main Server</span>
+                    <p style="font-size:.8rem;color:#8b949e;margin-top:6px">All imported movies will be assigned to the main server and proxied through it.</p>
+                  </div>
+                </div>
+                <div class="xc-tab-footer">
+                  <button class="btn btn-warning" onclick="document.querySelector('[data-tab=movieimp-advanced]').click()">&laquo; Previous</button>
+                  <button class="btn btn-primary" onclick="APP.confirmMovieImport()">Import</button>
+                </div>
+              </div>
             </div>
-        </div>
-    </div>
-
-    <!-- Logs Modal -->
-    <div id="logsModal" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
-        <div class="bg-dark-900 rounded-2xl w-full max-w-3xl max-h-[80vh] border border-dark-700 shadow-2xl flex flex-col">
-            <div class="p-4 border-b border-dark-700 flex items-center justify-between">
-                <h2 id="logsTitle" class="text-lg font-bold"><i class="fas fa-terminal text-accent-500 ml-2"></i> السجلات</h2>
-                <button onclick="closeLogsModal()" class="text-dark-400 hover:text-white text-xl"><i class="fas fa-times"></i></button>
+          </div>
+          <div id="movieImportPreview" style="display:none">
+            <div class="card mt-3">
+              <div class="card-header">Preview (<span id="movieImportCount">0</span> entries found)</div>
+              <div class="card-body">
+                <table class="data-table"><thead><tr><th>Name</th><th>URL</th><th>Group</th></tr></thead>
+                <tbody id="movieImportBody"></tbody></table>
+                <button class="btn btn-primary mt-2" onclick="APP.confirmMovieImport()">Import All</button>
+              </div>
             </div>
-            <pre id="logsContent" class="p-4 text-xs font-mono text-dark-300 overflow-auto flex-1 whitespace-pre-wrap" dir="ltr"></pre>
-        </div>
-    </div>
+          </div>
+        </section>
 
-    <!-- Toast Notification -->
-    <div id="toast" class="fixed bottom-6 left-6 z-50 hidden">
-        <div class="bg-dark-800 border border-dark-600 rounded-lg px-5 py-3 shadow-xl flex items-center gap-3">
-            <i id="toastIcon" class="fas fa-check-circle text-success"></i>
-            <span id="toastMsg" class="text-sm"></span>
-        </div>
-    </div>
+        <!-- SERIES -->
+        <section class="page" id="page-series" style="display:none">
+          <div class="page-header">
+            <h2>Series</h2>
+            <div class="page-actions">
+              <button class="btn btn-primary" onclick="APP.openSeriesForm()">+ Add Series</button>
+              <button class="btn btn-secondary" onclick="APP.navigateTo('series-import')">Import</button>
+            </div>
+          </div>
+          <div class="filter-bar">
+            <input type="text" class="form-control" placeholder="Search series..." id="seriesSearch">
+            <select class="form-control" id="seriesCatFilter"><option value="">All Categories</option></select>
+            <select class="form-control" id="seriesSortOrder" title="Sort order">
+              <option value="id_desc">Newest first</option>
+              <option value="id_asc">Oldest first</option>
+            </select>
+          </div>
+          <div class="table-responsive">
+            <table class="data-table" id="seriesTable">
+              <thead><tr><th width="50">ID</th><th width="60">Image</th><th>Title</th><th>Category</th><th>Seasons</th><th>Rating</th><th>TMDb</th><th width="140">Actions</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
 
-    <script src="/js/app.js"></script>
+        <!-- SERIES FORM -->
+        <section class="page" id="page-series-form" style="display:none">
+          <div class="page-header">
+            <h2 id="seriesFormTitle">Add Series</h2>
+            <div class="page-actions">
+              <button class="btn btn-secondary" onclick="APP.navigateTo('series')">Back</button>
+              <button class="btn btn-primary" onclick="APP.saveSeries()">Save</button>
+            </div>
+          </div>
+          <div class="wizard-tabs">
+            <button class="wizard-tab active" data-tab="series-details">Details</button>
+            <button class="wizard-tab" data-tab="series-info">Information</button>
+          </div>
+          <input type="hidden" id="seriesFormId">
+          <div class="wizard-panel active" id="tab-series-details">
+            <div class="form-row">
+              <label>TMDb Search</label>
+              <div class="form-input">
+                <div class="tmdb-search-wrap">
+                  <input type="text" id="seriesTmdbSearch" class="form-control" placeholder="Search TMDb for TV show...">
+                  <div id="seriesTmdbResults" class="tmdb-dropdown" style="display:none"></div>
+                </div>
+              </div>
+            </div>
+            <div class="form-row"><label>Series Title</label><div class="form-input"><input type="text" id="seriesTitle" class="form-control"></div></div>
+            <div class="form-row"><label>Year</label><div class="form-input"><input type="number" id="seriesYear" class="form-control"></div></div>
+            <div class="form-row"><label>Category</label><div class="form-input"><select id="seriesCategory" class="form-control"><option value="">None</option></select></div></div>
+            <div class="form-row"><label>Stream server (playlist URL)</label><div class="form-input">
+              <select id="seriesStreamServer" class="form-control" style="max-width:360px">
+                <option value="0">Use line / default</option>
+              </select>
+              <p class="text-muted mt-1" style="font-size:.72rem;color:#8b949e;margin:6px 0 0">Applies to all episodes in generated playlists.</p>
+            </div></div>
+            <div class="form-row"><label>Bouquets</label>
+              <div class="form-input">
+                <div class="tag-select" id="seriesBouquetTags"></div>
+                <select id="seriesBouquet" class="form-control mt-1" onchange="APP.addSeriesBqTag(this)">
+                  <option value="">Select bouquet...</option>
+                </select>
+              </div>
+            </div>
+          </div>
+          <div class="wizard-panel" id="tab-series-info">
+            <div class="form-row"><label>Cover URL</label><div class="form-input"><input type="text" id="seriesCover" class="form-control"><div class="img-preview" id="seriesCoverPreview"></div></div></div>
+            <div class="form-row"><label>Backdrop URL</label><div class="form-input"><input type="text" id="seriesBackdrop" class="form-control"><div class="img-preview" id="seriesBackdropPreview"></div></div></div>
+            <div class="form-row"><label>Plot</label><div class="form-input"><textarea id="seriesPlot" class="form-control" rows="4"></textarea></div></div>
+            <div class="form-row"><label>Cast</label><div class="form-input"><input type="text" id="seriesCastField" class="form-control"></div></div>
+            <div class="form-row"><label>Director</label><div class="form-input"><input type="text" id="seriesDirector" class="form-control"></div></div>
+            <div class="form-row"><label>Genre</label><div class="form-input"><input type="text" id="seriesGenre" class="form-control"></div></div>
+            <div class="form-row"><label>Release Date</label><div class="form-input"><input type="text" id="seriesReleaseDate" class="form-control" placeholder="YYYY-MM-DD"></div></div>
+            <div class="form-row"><label>Rating (0-10)</label><div class="form-input"><input type="number" id="seriesRating" class="form-control" min="0" max="10" step="0.1"></div></div>
+            <div class="form-row"><label>YouTube Trailer</label><div class="form-input"><input type="text" id="seriesTrailer" class="form-control"></div></div>
+            <div class="form-row"><label>TMDb ID</label><div class="form-input"><input type="number" id="seriesTmdbId" class="form-control" readonly></div></div>
+          </div>
+          <!-- Episodes panel (shown when editing existing series) -->
+          <div id="seriesEpisodesPanel" style="display:none">
+            <div class="card mt-3">
+              <div class="card-header">
+                <span>Episodes</span>
+                <button class="btn btn-xs btn-primary float-right" onclick="APP.openEpisodeForm()">+ Add Episode</button>
+              </div>
+              <div class="card-body">
+                <div class="season-tabs" id="seasonTabs"></div>
+                <div class="table-responsive">
+                  <table class="data-table" id="episodesTable">
+                    <thead><tr><th>Ep #</th><th>Title</th><th>Stream URL</th><th>Extension</th><th width="120">Actions</th></tr></thead>
+                    <tbody></tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- EPISODE FORM MODAL -->
+        <div class="modal-overlay" id="episodeModal" style="display:none">
+          <div class="modal-box modal-lg">
+            <div class="modal-header">
+              <h3 id="episodeFormTitle">Add Episode</h3>
+              <button class="modal-close" onclick="APP.closeEpisodeModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+              <input type="hidden" id="episodeFormId">
+              <input type="hidden" id="episodeSeriesId">
+              <div class="form-row"><label>Season #</label><div class="form-input"><input type="number" id="episodeSeason" class="form-control" value="1" min="0"></div></div>
+              <div class="form-row"><label>Episode #</label><div class="form-input"><input type="number" id="episodeNum" class="form-control" value="1" min="1"></div></div>
+              <div class="form-row"><label>Title</label><div class="form-input"><input type="text" id="episodeTitle" class="form-control"></div></div>
+              <div class="form-row"><label>Stream URL</label><div class="form-input"><input type="text" id="episodeUrl" class="form-control"></div></div>
+              <div class="form-row"><label>Container Extension</label><div class="form-input">
+                <select id="episodeExtension" class="form-control"><option>mp4</option><option>mkv</option><option>avi</option><option>ts</option><option>m3u8</option></select>
+              </div></div>
+            </div>
+            <div class="modal-footer">
+              <button class="btn btn-secondary" onclick="APP.closeEpisodeModal()">Cancel</button>
+              <button class="btn btn-primary" onclick="APP.saveEpisode()">Save</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- SERIES IMPORT (XC-STYLE) -->
+        <section class="page" id="page-series-import" style="display:none">
+          <div class="page-header">
+            <h2>Import Series</h2>
+            <div class="page-actions">
+              <button class="btn btn-primary" onclick="APP.openSeriesForm()">Add Single</button>
+              <button class="btn btn-secondary" onclick="APP.navigateTo('series')">Back</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-body" style="padding:0">
+              <p class="import-hint">Importing Series using this method will parse your M3U or folder and push the individual episodes through. If you have category and bouquet allocation set up, they will be used here too.</p>
+              <div class="wizard-tabs">
+                <button class="wizard-tab active" data-tab="seriesimp-details">Details</button>
+                <button class="wizard-tab" data-tab="seriesimp-advanced">Advanced</button>
+                <button class="wizard-tab" data-tab="seriesimp-server">Server</button>
+              </div>
+              <div class="wizard-panel active" id="tab-seriesimp-details" style="padding:20px">
+                <div class="form-row"><label>Type</label>
+                  <div class="form-input">
+                    <label style="margin-right:16px;cursor:pointer"><input type="radio" name="seriesImportType" value="m3u" checked> M3U</label>
+                    <label style="cursor:pointer"><input type="radio" name="seriesImportType" value="folder"> Folder</label>
+                  </div>
+                </div>
+                <div class="form-row"><label>M3U File</label>
+                  <div class="form-input">
+                    <input type="file" id="seriesImportFile" class="form-control file-input" accept=".m3u,.m3u8,.txt">
+                  </div>
+                </div>
+                <div class="form-row"><label>Or Paste M3U</label>
+                  <div class="form-input"><textarea id="seriesImportM3u" class="form-control" rows="6" placeholder="Paste M3U content with S01E01 naming..."></textarea></div>
+                </div>
+                <div class="form-row"><label>Fallback Categories</label>
+                  <div class="form-input"><select id="seriesImportCat" class="form-control"><option value="">None</option></select></div>
+                </div>
+                <div class="form-row"><label>Fallback Bouquets</label>
+                  <div class="form-input"><select id="seriesImportBq" class="form-control"><option value="">None</option></select></div>
+                </div>
+                <div class="xc-tab-footer">
+                  <div></div>
+                  <button class="btn btn-primary" onclick="document.querySelector('[data-tab=seriesimp-advanced]').click()">Next &raquo;</button>
+                </div>
+              </div>
+              <div class="wizard-panel" id="tab-seriesimp-advanced" style="padding:20px">
+                <div class="form-row"><label>Disable TMDb</label>
+                  <div class="form-input"><label class="toggle"><input type="checkbox" id="seriesImportNoTmdb"><span class="toggle-slider"></span></label></div>
+                </div>
+                <div class="form-row"><label>Ignore No Match</label>
+                  <div class="form-input"><label class="toggle"><input type="checkbox" id="seriesImportIgnoreNoMatch"><span class="toggle-slider"></span></label></div>
+                </div>
+                <div class="xc-tab-footer">
+                  <button class="btn btn-warning" onclick="document.querySelector('[data-tab=seriesimp-details]').click()">&laquo; Previous</button>
+                  <button class="btn btn-primary" onclick="document.querySelector('[data-tab=seriesimp-server]').click()">Next &raquo;</button>
+                </div>
+              </div>
+              <div class="wizard-panel" id="tab-seriesimp-server" style="padding:20px">
+                <div class="form-row"><label>Target Server</label>
+                  <div class="form-input">
+                    <span class="badge badge-success">Main Server</span>
+                    <p style="font-size:.8rem;color:#8b949e;margin-top:6px">All imported series will be assigned to the main server and proxied through it.</p>
+                  </div>
+                </div>
+                <div class="xc-tab-footer">
+                  <button class="btn btn-warning" onclick="document.querySelector('[data-tab=seriesimp-advanced]').click()">&laquo; Previous</button>
+                  <button class="btn btn-primary" onclick="APP.confirmSeriesImport()">Import</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div id="seriesImportResult" style="display:none" class="card mt-3">
+            <div class="card-header">Import Result</div>
+            <div class="card-body" id="seriesImportResultBody"></div>
+          </div>
+        </section>
+
+        <!-- EPISODES (STANDALONE) -->
+        <section class="page" id="page-episodes" style="display:none">
+          <div class="page-header">
+            <h2>Episodes</h2>
+            <div class="page-actions">
+              <button class="btn btn-primary" onclick="APP.openStandaloneEpisodeForm()">Add Episode</button>
+            </div>
+          </div>
+          <div class="filter-bar">
+            <input type="text" class="form-control" placeholder="Search Episodes..." id="episodesSearch">
+            <select class="form-control" id="episodesSeriesFilter"><option value="">All Series</option></select>
+            <select class="form-control" id="episodesPerPage" style="max-width:80px">
+              <option value="50" selected>50</option>
+              <option value="100">100</option>
+              <option value="200">200</option>
+            </select>
+          </div>
+          <div class="table-responsive">
+            <table class="data-table" id="allEpisodesTable">
+              <thead><tr>
+                <th width="60">ID</th>
+                <th width="60">Image</th>
+                <th>Name</th>
+                <th>Server</th>
+                <th>Status</th>
+                <th width="130">Actions</th>
+                <th>Stream Info</th>
+              </tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div id="episodesPagination" class="pagination-bar"></div>
+        </section>
+
+        <!-- STANDALONE EPISODE ADD MODAL -->
+        <div class="modal-overlay" id="standaloneEpisodeModal" style="display:none">
+          <div class="modal-box modal-lg">
+            <div class="modal-header">
+              <h3>Add Episode</h3>
+              <button class="modal-close" onclick="APP.closeStandaloneEpisodeModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+              <div class="form-row"><label>Series</label><div class="form-input"><select id="standaloneEpSeries" class="form-control"><option value="">Select series...</option></select></div></div>
+              <div class="form-row"><label>Season #</label><div class="form-input"><input type="number" id="standaloneEpSeason" class="form-control" value="1" min="0"></div></div>
+              <div class="form-row"><label>Episode #</label><div class="form-input"><input type="number" id="standaloneEpNum" class="form-control" value="1" min="1"></div></div>
+              <div class="form-row"><label>Title</label><div class="form-input"><input type="text" id="standaloneEpTitle" class="form-control"></div></div>
+              <div class="form-row"><label>Stream URL</label><div class="form-input"><input type="text" id="standaloneEpUrl" class="form-control"></div></div>
+              <div class="form-row"><label>Container</label><div class="form-input">
+                <select id="standaloneEpExt" class="form-control"><option>mp4</option><option>mkv</option><option>avi</option><option>ts</option><option>m3u8</option></select>
+              </div></div>
+            </div>
+            <div class="modal-footer">
+              <button class="btn btn-secondary" onclick="APP.closeStandaloneEpisodeModal()">Cancel</button>
+              <button class="btn btn-primary" onclick="APP.saveStandaloneEpisode()">Save</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- TRANSCODE PROFILES -->
+        <section class="page" id="page-transcode-profiles" style="display:none">
+          <div class="page-header">
+            <h2>Transcode Profiles</h2>
+            <div class="page-actions">
+              <button class="btn btn-primary" onclick="APP.openTranscodeProfileModal()">+ Add Profile</button>
+            </div>
+          </div>
+          <div class="card">
+            <table class="data-table" id="transcodeProfilesTable">
+              <thead><tr><th>ID</th><th>Name</th><th>Mode</th><th>Encoder</th><th>Preset</th><th>Audio kbps</th><th>HLS Seg</th><th>Actions</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- TRANSCODE PROFILE MODAL -->
+        <div class="modal-overlay" id="transcodeProfileModal" style="display:none">
+          <div class="modal" style="max-width:520px">
+            <div class="modal-header">
+              <h3 id="transcodeProfileModalTitle">Add Transcode Profile</h3>
+              <button class="modal-close" onclick="APP.closeTranscodeProfileModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+              <input type="hidden" id="tpId">
+              <div class="form-row"><label>Name</label><div class="form-input"><input type="text" id="tpName" class="form-control" placeholder="e.g. HD Transcode"></div></div>
+              <div class="form-row"><label>Output Mode</label><div class="form-input"><select id="tpOutputMode" class="form-control"><option value="copy">Copy (no re-encode)</option><option value="transcode">Transcode</option></select></div></div>
+              <div class="form-row"><label>Video Encoder</label><div class="form-input"><select id="tpVideoEncoder" class="form-control"><option value="cpu_x264">CPU (x264)</option><option value="apple">Apple VideoToolbox</option><option value="nvidia">NVIDIA NVENC</option><option value="intel">Intel QSV</option><option value="amd">AMD AMF</option></select></div></div>
+              <div class="form-row"><label>x264 Preset</label><div class="form-input"><select id="tpPreset" class="form-control"><option value="ultrafast">Ultrafast</option><option value="veryfast" selected>Veryfast</option><option value="fast">Fast</option><option value="medium">Medium</option></select></div></div>
+              <div class="form-row"><label>Rendition Mode</label><div class="form-input"><select id="tpRenditionMode" class="form-control"><option value="single">Single</option><option value="multi">Multi-bitrate</option></select></div></div>
+              <div class="form-row"><label>Renditions</label><div class="form-input" id="tpRenditionsWrap">
+                <label><input type="checkbox" value="1080p" checked> 1080p</label>
+                <label><input type="checkbox" value="720p"> 720p</label>
+                <label><input type="checkbox" value="480p"> 480p</label>
+                <label><input type="checkbox" value="360p"> 360p</label>
+              </div></div>
+              <div class="form-row"><label>Audio Bitrate (kbps)</label><div class="form-input"><input type="number" id="tpAudioBitrate" class="form-control" value="128" min="64" max="320"></div></div>
+              <div class="form-row"><label>HLS Segment (sec)</label><div class="form-input"><input type="number" id="tpHlsSegment" class="form-control" value="4" min="2" max="12"></div></div>
+              <div class="form-row"><label>HLS Playlist Size</label><div class="form-input"><input type="number" id="tpHlsPlaylist" class="form-control" value="10" min="0" max="1000"></div></div>
+            </div>
+            <div class="modal-footer">
+              <button class="btn" onclick="APP.closeTranscodeProfileModal()">Cancel</button>
+              <button class="btn btn-primary" onclick="APP.saveTranscodeProfile()">Save</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- DRM STREAMS -->
+        <section class="page" id="page-drm-streams" style="display:none">
+          <div class="page-header">
+            <h2>DRM Streams</h2>
+            <div class="page-actions">
+              <button class="btn btn-primary" onclick="APP.openDrmStreamModal()">+ Add DRM Stream</button>
+            </div>
+          </div>
+          <p style="color:#999;margin-bottom:12px">Internal-only restream generator. Paste the extension dump below to autofill the DRM form. Transcode profile is optional (default is copy). Manage transcode profiles under <strong>Manage → Transcode Profiles</strong>. Copy the output URL and use it as a source in a normal live channel.</p>
+          <div class="card" style="margin-bottom:12px">
+            <div class="card-header">DRM Import</div>
+            <div class="card-body">
+              <div class="form-row">
+                <label>Paste dump</label>
+                <div class="form-input">
+                  <textarea id="drmImportRawText" class="form-control" rows="6" placeholder="Paste Widevine/PSSH + KID/Key + DASH MPD URL + Headers: { ... }"></textarea>
+                </div>
+              </div>
+              <div style="margin-top:10px">
+                <button class="btn btn-primary" onclick="APP.parseDrmImport()">Parse &amp; fill</button>
+              </div>
+            </div>
+          </div>
+          <div class="card">
+            <table class="data-table" id="drmStreamsTable">
+              <thead><tr><th>ID</th><th>Name</th><th>Status</th><th>Output URL</th><th>Actions</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- DRM STREAM MODAL -->
+        <div class="modal-overlay" id="drmStreamModal" style="display:none">
+          <div class="modal" style="max-width:560px">
+            <div class="modal-header">
+              <h3 id="drmStreamModalTitle">Add DRM Stream</h3>
+              <button class="modal-close" onclick="APP.closeDrmStreamModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+              <input type="hidden" id="drmId">
+              <div class="form-row"><label>Name</label><div class="form-input"><input type="text" id="drmName" class="form-control" placeholder="e.g. Channel HD DRM"></div></div>
+              <div class="form-row"><label>MPD URL</label><div class="form-input"><input type="text" id="drmMpdUrl" class="form-control" placeholder="https://example.com/manifest.mpd"></div></div>
+              <div class="form-row"><label>KID (hex)</label><div class="form-input"><input type="text" id="drmKid" class="form-control" placeholder="32 hex characters"></div></div>
+              <div class="form-row"><label>Key (hex)</label><div class="form-input"><input type="text" id="drmKey" class="form-control" placeholder="32 hex characters"></div></div>
+              <div class="form-row"><label>Custom User-Agent</label><div class="form-input"><input type="text" id="drmUserAgent" class="form-control" placeholder="Optional"></div></div>
+              <div class="form-row"><label>Custom Headers</label><div class="form-input"><textarea id="drmHeaders" class="form-control" rows="3" placeholder="Header: Value (one per line)"></textarea></div></div>
+              <div class="form-row"><label>Transcode Profile</label><div class="form-input">
+                <select id="drmTranscodeProfile" class="form-control">
+                  <option value="">None (copy mode)</option>
+                </select>
+              </div></div>
+              <div class="form-row"><label>Output Format</label><div class="form-input"><span class="badge badge-info" style="font-size:.9em">MPEG-TS Only</span><span style="color:#8b949e;font-size:.85em;margin-left:8px">Output: /drm/{id}/stream.ts</span></div></div>
+            </div>
+            <div class="modal-footer">
+              <button class="btn" onclick="APP.closeDrmStreamModal()">Cancel</button>
+              <button class="btn btn-primary" onclick="APP.saveDrmStream()">Save</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- STREAMS -->
+        <section class="page" id="page-streams" style="display:none">
+          <div class="page-header">
+            <h2>Live Streams</h2>
+            <div class="page-actions">
+              <button class="btn btn-primary" onclick="APP.openStreamForm()">+ Add Stream</button>
+              <button class="btn btn-secondary" onclick="APP.navigateTo('stream-import')">Import</button>
+            </div>
+          </div>
+          <div class="filter-bar">
+            <input type="text" class="form-control" placeholder="Search streams..." id="streamsSearch">
+            <select class="form-control" id="streamsCategoryFilter"><option value="">All Categories</option></select>
+            <select class="form-control" id="streamsStatusFilter">
+              <option value="">All Status</option>
+              <option value="running">Online</option>
+              <option value="stopped">Offline</option>
+              <option value="error">Error</option>
+              <option value="on_demand">On-demand only</option>
+            </select>
+            <select class="form-control" id="streamsPerPage" style="max-width:100px">
+              <option value="25">25</option>
+              <option value="50" selected>50</option>
+              <option value="100">100</option>
+            </select>
+          </div>
+          <div class="table-responsive">
+            <table class="data-table stream-table" id="streamsTable">
+              <thead><tr>
+                <th width="50">ID</th>
+                <th width="36"></th>
+                <th>Name</th>
+                <th width="60">Clients</th>
+                <th width="80">Uptime</th>
+                <th width="160">Actions</th>
+                <th width="36">Play</th>
+                <th width="260">Stream Info</th>
+              </tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div class="pagination-bar" id="streamsPagination"></div>
+        </section>
+
+        <!-- STREAM MODAL (XC-STYLE) -->
+        <div class="modal-overlay" id="streamModal" style="display:none">
+          <div class="modal-box modal-xl">
+            <div class="modal-header">
+              <h3 id="streamModalTitle">Add Stream</h3>
+              <div class="modal-header-actions">
+                <button class="btn btn-primary btn-sm" onclick="APP.saveStream()">Save</button>
+                <button class="modal-close" onclick="APP.closeStreamModal()">&times;</button>
+              </div>
+            </div>
+            <div class="xc-tabs" id="streamModalTabs">
+              <button class="xc-tab active" data-panel="sm-details">Details</button>
+              <button class="xc-tab" data-panel="sm-sources">Sources</button>
+              <button class="xc-tab" data-panel="sm-advanced">Advanced</button>
+              <button class="xc-tab" data-panel="sm-epg">EPG</button>
+              <button class="xc-tab" data-panel="sm-servers">Servers</button>
+            </div>
+            <input type="hidden" id="streamFormId">
+
+            <!-- Details Tab -->
+            <div class="xc-tab-panel active" id="sm-details">
+              <div class="form-row"><label>Stream Name</label><div class="form-input"><input type="text" id="streamName" class="form-control" placeholder="Channel name"></div></div>
+              <div class="form-row"><label>Stream Logo</label><div class="form-input">
+                <div class="input-with-btn">
+                  <input type="text" id="streamLogoUrl" class="form-control" placeholder="https://...">
+                  <button class="btn btn-xs btn-secondary" onclick="APP.previewStreamLogo()">Preview</button>
+                </div>
+                <div id="streamLogoPreview" class="img-preview" style="margin-top:6px"></div>
+              </div></div>
+              <div class="form-row"><label>Category</label><div class="form-input"><select id="streamCategory" class="form-control"><option value="">None</option></select></div></div>
+              <div class="form-row"><label>Bouquets</label>
+                <div class="form-input">
+                  <div class="tag-select" id="streamBouquetTags"></div>
+                  <select id="streamBouquet" class="form-control mt-1" onchange="APP.addStreamBqTag(this)">
+                    <option value="">Select bouquet...</option>
+                  </select>
+                </div>
+              </div>
+              <div class="form-row"><label>Notes</label><div class="form-input"><textarea id="streamNotes" class="form-control" rows="3" placeholder="Notes about this stream..."></textarea></div></div>
+            </div>
+
+            <!-- Sources Tab -->
+            <div class="xc-tab-panel" id="sm-sources">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+                <strong style="color:#f0f6fc;font-size:.9rem">Stream Sources</strong>
+                <div style="display:flex;gap:6px">
+                  <button class="btn btn-xs btn-primary" onclick="APP.addSourceRow()">+ Add URL</button>
+                  <button class="btn btn-xs btn-secondary" onclick="APP.scanAllSources()">Scan Sources</button>
+                </div>
+              </div>
+              <div class="form-row"><label>Input Type</label><div class="form-input">
+                <select id="streamInputType" class="form-control" style="max-width:200px">
+                  <option value="auto">Auto Detect</option>
+                  <option value="hls">HLS (m3u8)</option>
+                  <option value="ts">MPEG-TS</option>
+                  <option value="rtmp">RTMP</option>
+                  <option value="srt">SRT</option>
+                  <option value="udp">UDP</option>
+                </select>
+                <p class="text-muted mt-1" style="font-size:.72rem;color:#8b949e;margin:6px 0 0">If Auto mis-detects (e.g. HLS without <code>.m3u8</code> in the URL), set <strong>HLS</strong> or <strong>MPEG-TS</strong> explicitly.</p>
+              </div></div>
+              <table class="data-table source-table" id="sourceTable">
+                <thead><tr>
+                  <th width="30">#</th>
+                  <th>URL</th>
+                  <th width="180">Stream Info</th>
+                  <th width="60">Actions</th>
+                </tr></thead>
+                <tbody id="sourceTableBody"></tbody>
+              </table>
+            </div>
+
+            <!-- Advanced Tab -->
+            <div class="xc-tab-panel" id="sm-advanced">
+              <div class="form-row"><label>Generate PTS</label><div class="form-input"><label class="toggle"><input type="checkbox" id="streamGenPts" checked><span class="toggle-slider"></span></label><span class="toggle-label">Generates presentation timestamps (-fflags +genpts)</span></div></div>
+              <div class="form-row"><label>Native Frames</label><div class="form-input"><label class="toggle"><input type="checkbox" id="streamReadNative"><span class="toggle-slider"></span></label><span class="toggle-label">Read input at native frame rate (-re)</span></div></div>
+              <div class="form-row"><label>Minimal ingest</label><div class="form-input"><label class="toggle"><input type="checkbox" id="streamMinimalIngest"><span class="toggle-slider"></span></label><span class="toggle-label">Skip explicit analyze/probe limits (faster open; webapp v1 style). Or set env FFMPEG_MINIMAL_INGEST=1 for all channels.</span></div></div>
+              <div class="form-row"><label>Stream All Codecs</label><div class="form-input"><label class="toggle"><input type="checkbox" id="streamStreamAll"><span class="toggle-slider"></span></label><span class="toggle-label">Stream all codecs including unknown (-map 0 -copy_unknown)</span></div></div>
+              <div class="form-row"><label>Allow Recording</label><div class="form-input"><label class="toggle"><input type="checkbox" id="streamAllowRecord" checked><span class="toggle-slider"></span></label></div></div>
+              <div class="form-row"><label>Restart on FPS Drop</label><div class="form-input"><label class="toggle"><input type="checkbox" id="streamFpsRestart"><span class="toggle-slider"></span></label></div></div>
+              <div class="form-row" id="fpsThresholdRow" style="display:none"><label>FPS Threshold %</label><div class="form-input"><input type="number" id="streamFpsThreshold" class="form-control" value="90" min="1" max="100" style="max-width:120px"></div></div>
+              <div class="form-row"><label>Custom Channel SID</label><div class="form-input"><input type="text" id="streamCustomSid" class="form-control" placeholder="Optional SID"></div></div>
+              <div class="form-row"><label>On Demand Probesize</label><div class="form-input"><input type="number" id="streamProbesize" class="form-control" value="1500000" style="max-width:160px"></div></div>
+              <div class="form-row"><label>Minute Delay</label><div class="form-input"><input type="number" id="streamDelayMin" class="form-control" value="0" min="0" style="max-width:120px"></div></div>
+              <div class="form-row"><label>User-Agent</label><div class="form-input"><input type="text" id="streamUserAgent" class="form-control"></div></div>
+              <div class="form-row"><label>Referer</label><div class="form-input"><input type="text" id="streamReferer" class="form-control"></div></div>
+              <div class="form-row"><label>HTTP Proxy</label><div class="form-input"><input type="text" id="streamHttpProxy" class="form-control" placeholder="http://proxy:port"></div></div>
+              <div class="form-row"><label>Custom FFmpeg Args</label><div class="form-input"><input type="text" id="streamCustomArgs" class="form-control" placeholder="-analyzeduration 5000000"></div></div>
+              <div class="form-row"><label>Max Retries</label><div class="form-input"><input type="number" id="streamMaxRetries" class="form-control" value="3" min="0" max="100" style="max-width:120px"></div></div>
+              <div class="form-row"><label>Retry Delay (sec)</label><div class="form-input"><input type="number" id="streamRetryDelay" class="form-control" value="5" min="1" max="300" style="max-width:120px"></div></div>
+              <div class="form-row"><label>Transcode Profile</label><div class="form-input">
+                <select id="streamTranscodeProfile" class="form-control" style="max-width:260px"><option value="">None (copy mode)</option></select>
+              </div></div>
+              <div class="form-row"><label>Output Format</label><div class="form-input">
+                <select id="streamOutputFormat" class="form-control" style="max-width:200px"><option value="hls">HLS</option><option value="mpegts">MPEG-TS</option></select>
+              </div></div>
+              <div class="form-row"><label>Auto-Fix Enabled</label><div class="form-input"><label class="toggle"><input type="checkbox" id="streamAutoFix"><span class="toggle-slider"></span></label></div></div>
+              <div class="form-row"><label>Sort Order</label><div class="form-input"><input type="number" id="streamSortOrder" class="form-control" value="0" style="max-width:120px"></div></div>
+            </div>
+
+            <!-- EPG Tab -->
+            <div class="xc-tab-panel" id="sm-epg">
+              <div class="form-row"><label>EPG Channel ID</label><div class="form-input"><input type="text" id="streamEpgId" class="form-control" placeholder="XMLTV channel ID"></div></div>
+              <div class="form-row"><label>EPG Offset (hours)</label><div class="form-input"><input type="number" id="streamEpgOffset" class="form-control" value="0" style="max-width:120px"></div></div>
+            </div>
+
+            <!-- Servers Tab -->
+            <div class="xc-tab-panel" id="sm-servers">
+              <div class="form-row"><label>Stream server (playlist URL)</label><div class="form-input">
+                <select id="streamPlaylistServer" class="form-control" style="max-width:360px">
+                  <option value="0">Use line / default</option>
+                </select>
+                <p class="text-muted mt-1" style="font-size:.72rem;color:#8b949e;margin:6px 0 0">M3U/Xtream playlist links for this channel use this server’s public base URL when set.</p>
+              </div></div>
+              <div class="form-row"><label>On Demand</label><div class="form-input"><label class="toggle"><input type="checkbox" id="streamOnDemand"><span class="toggle-slider"></span></label><span class="toggle-label">Only start FFmpeg when a user connects</span></div></div>
+              <div class="form-row"><label>Pre-warm</label><div class="form-input"><label class="toggle"><input type="checkbox" id="streamPreWarm"><span class="toggle-slider"></span></label><span class="toggle-label">Keep FFmpeg running: skip on-demand idle stop; optional boot start when not on-demand</span></div></div>
+              <div class="form-row"><label>Override prebuffer (MB)</label><div class="form-input"><input type="number" id="streamPrebufferMbOverride" class="form-control" min="0.5" max="16" step="0.5" placeholder="Global default" style="max-width:120px"><span class="toggle-label" style="margin-left:8px;font-size:.65rem;color:#8b949e">Empty = use global</span></div></div>
+              <div class="form-row"><label>Override ingest</label><div class="form-input">
+                <select id="streamIngestOverride" class="form-control" style="max-width:220px">
+                  <option value="">Global default</option>
+                  <option value="webapp">Webapp (fast)</option>
+                  <option value="xc">XC (balanced)</option>
+                  <option value="safe">Safe (stable)</option>
+                </select>
+              </div></div>
+              <div class="form-row"><label>Restart on Edit</label><div class="form-input"><label class="toggle"><input type="checkbox" id="streamRestartOnEdit"><span class="toggle-slider"></span></label></div></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- STREAM PLAYER MODAL -->
+        <div class="modal-overlay" id="streamPlayerModal" style="display:none">
+          <div class="modal-box modal-lg">
+            <div class="modal-header">
+              <h3 id="streamPlayerTitle">Test Player</h3>
+              <button class="modal-close" onclick="APP.closeStreamPlayer()">&times;</button>
+            </div>
+            <div class="modal-body" style="padding:0">
+              <video id="streamPlayerVideo" controls autoplay style="width:100%;max-height:500px;background:#000"></video>
+              <div style="padding:12px">
+                <div id="streamPlayerOutputHint" style="font-size:.72rem;color:#58a6ff;margin-bottom:8px"></div>
+                <label style="font-size:.7rem;color:#8b949e;display:block;margin-bottom:4px">Playback URL</label>
+                <input type="text" id="streamPlayerUrl" class="form-control" readonly style="font-size:.75rem;color:#8b949e">
+                <div id="streamPlayerUrlSignedWrap" style="display:none;margin-top:10px">
+                  <label style="font-size:.7rem;color:#8b949e;display:block;margin-bottom:4px">Signed URL (other PC / no loopback)</label>
+                  <input type="text" id="streamPlayerUrlSigned" class="form-control" readonly style="font-size:.75rem;color:#8b949e">
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- STREAM IMPORT (XC-STYLE) -->
+        <section class="page" id="page-stream-import" style="display:none">
+          <div class="page-header">
+            <h2>Import Streams</h2>
+            <div class="page-actions">
+              <button class="btn btn-primary" onclick="APP.openStreamForm()">Add Single</button>
+              <button class="btn btn-secondary" onclick="APP.navigateTo('streams')">Back</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-body" style="padding:0">
+              <div class="wizard-tabs">
+                <button class="wizard-tab active" data-tab="streamimp-details">Details</button>
+                <button class="wizard-tab" data-tab="streamimp-advanced">Advanced</button>
+                <button class="wizard-tab" data-tab="streamimp-server">Servers</button>
+              </div>
+              <div class="wizard-panel active" id="tab-streamimp-details" style="padding:20px">
+                <div class="form-row"><label>M3U File</label>
+                  <div class="form-input">
+                    <input type="file" id="streamImportFile" class="form-control file-input" accept=".m3u,.m3u8,.txt">
+                  </div>
+                </div>
+                <div class="form-row"><label>Or Paste M3U / URL</label>
+                  <div class="form-input"><textarea id="streamImportRaw" class="form-control" rows="6" placeholder="Paste raw extraction dump, M3U content, or URL here..."></textarea></div>
+                </div>
+                <div class="form-row"><label>Categories</label>
+                  <div class="form-input"><select id="streamImportCat" class="form-control"><option value="">None</option></select></div>
+                </div>
+                <div class="form-row"><label>Bouquets</label>
+                  <div class="form-input"><select id="streamImportBq" class="form-control"><option value="">None</option></select></div>
+                </div>
+                <div class="form-row"><label>Notes</label>
+                  <div class="form-input"><textarea id="streamImportNotes" class="form-control" rows="3" placeholder="Optional notes..."></textarea></div>
+                </div>
+                <div class="xc-tab-footer">
+                  <div></div>
+                  <button class="btn btn-primary" onclick="document.querySelector('[data-tab=streamimp-advanced]').click()">Next &raquo;</button>
+                </div>
+              </div>
+              <div class="wizard-panel" id="tab-streamimp-advanced" style="padding:20px">
+                <div class="form-row"><label>Stream Name (optional)</label>
+                  <div class="form-input"><input type="text" id="streamImportName" class="form-control" placeholder="Auto-detected if empty"></div>
+                </div>
+                <div class="xc-tab-footer">
+                  <button class="btn btn-warning" onclick="document.querySelector('[data-tab=streamimp-details]').click()">&laquo; Previous</button>
+                  <button class="btn btn-primary" onclick="document.querySelector('[data-tab=streamimp-server]').click()">Next &raquo;</button>
+                </div>
+              </div>
+              <div class="wizard-panel" id="tab-streamimp-server" style="padding:20px">
+                <div class="form-row"><label>Target Server</label>
+                  <div class="form-input">
+                    <span class="badge badge-success">Main Server</span>
+                    <p style="font-size:.8rem;color:#8b949e;margin-top:6px">Imported streams will be added to the main server.</p>
+                  </div>
+                </div>
+                <div class="xc-tab-footer">
+                  <button class="btn btn-warning" onclick="document.querySelector('[data-tab=streamimp-advanced]').click()">&laquo; Previous</button>
+                  <button class="btn btn-primary" onclick="APP.confirmStreamImport()">Import</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div id="streamImportResult" style="display:none" class="card mt-3">
+            <div class="card-header">Import Result</div>
+            <div class="card-body" id="streamImportResultBody"></div>
+          </div>
+        </section>
+
+        <!-- STREAM LOGS MODAL -->
+        <div class="modal-overlay" id="streamLogsModal" style="display:none">
+          <div class="modal-box modal-lg">
+            <div class="modal-header"><h3>Stream Logs</h3><button class="modal-close" onclick="$('#streamLogsModal').style.display='none'">&times;</button></div>
+            <div class="modal-body"><pre id="streamLogsContent" style="max-height:400px;overflow:auto;font-size:.8rem;color:#c9d1d9;background:#0d1117;padding:12px;border-radius:4px;white-space:pre-wrap;word-break:break-all;"></pre></div>
+          </div>
+        </div>
+
+        <!-- IMPORT PROVIDERS -->
+        <section class="page" id="page-providers" style="display:none">
+          <div class="page-header">
+            <h2>Import Providers</h2>
+            <div class="page-actions"><button class="btn btn-primary" onclick="APP.openProviderModal(null)">+ Add Provider</button></div>
+          </div>
+          <p style="color:#8b949e;font-size:.9rem;margin-bottom:12px">Store Xtream API URLs (with <code>username</code> and <code>password</code> query params). Use <strong>Import Content</strong> to pull movies, series, or live channels.</p>
+          <div class="card">
+            <table class="data-table">
+              <thead><tr><th>ID</th><th>Name</th><th>Host</th><th>Bouquet</th><th>Auto-update</th><th>Last run</th><th>Actions</th></tr></thead>
+              <tbody id="providersTableBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="page" id="page-import-content" style="display:none">
+          <div class="page-header">
+            <h2>Import Content</h2>
+          </div>
+          <div class="card" style="padding:20px">
+            <div class="form-row"><label>Provider</label>
+              <div class="form-input"><select id="importProviderSel" class="form-control"></select></div>
+            </div>
+            <div class="form-row"><label>Content type</label>
+              <div class="form-input">
+                <select id="importContentType" class="form-control">
+                  <option value="movies">Movies (VOD)</option>
+                  <option value="series">Series</option>
+                  <option value="live">Live channels</option>
+                  <option value="m3u">M3U file (live)</option>
+                </select>
+              </div>
+            </div>
+            <div id="importXtreamBlock">
+              <div class="form-row"><label>Remote categories</label>
+                <div class="form-input">
+                  <button type="button" class="btn btn-secondary btn-sm" onclick="APP.fetchImportCategories()">Load categories</button>
+                  <button type="button" class="btn btn-xs btn-secondary" onclick="APP.toggleImportCatsAll(true)">All</button>
+                  <button type="button" class="btn btn-xs btn-secondary" onclick="APP.toggleImportCatsAll(false)">None</button>
+                </div>
+              </div>
+              <div id="importCatCheckboxWrap" style="max-height:280px;overflow:auto;border:1px solid #30363d;border-radius:6px;padding:10px;margin-bottom:12px;background:#161b22"></div>
+            </div>
+            <div id="importM3uBlock" style="display:none">
+              <div class="form-row"><label>M3U text</label>
+                <div class="form-input"><textarea id="importM3uText" class="form-control" rows="8" placeholder="#EXTM3U..."></textarea></div>
+              </div>
+            </div>
+            <div class="form-row"><label>Bouquet (optional)</label>
+              <div class="form-input"><select id="importBouquetSel" class="form-control"><option value="0">— None —</option></select></div>
+            </div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+              <button class="btn btn-primary" onclick="APP.startContentImport()">Start import</button>
+              <button class="btn btn-warning" onclick="APP.cancelContentImport()">Cancel job</button>
+            </div>
+            <div id="importJobPanel" style="margin-top:16px;display:none">
+              <div class="form-row"><label>Job status</label>
+                <div class="form-input"><span id="importJobStatus" class="badge badge-info">—</span></div>
+              </div>
+              <div class="form-row"><label>Progress</label>
+                <div class="form-input">
+                  <span id="importJobCounts" style="font-size:.9rem;color:#8b949e">Imported: 0 | Skipped: 0 | Errors: 0</span>
+                </div>
+              </div>
+              <pre id="importJobLog" style="max-height:220px;overflow:auto;font-size:.75rem;background:#0d1117;color:#c9d1d9;padding:10px;border-radius:6px;white-space:pre-wrap"></pre>
+            </div>
+          </div>
+        </section>
+
+        <div class="modal-overlay" id="providerModal" style="display:none">
+          <div class="modal-box">
+            <div class="modal-header"><h3 id="providerModalTitle">Provider</h3><button class="modal-close" onclick="APP.closeProviderModal()">&times;</button></div>
+            <div class="modal-body">
+              <input type="hidden" id="providerEditId">
+              <div class="form-row"><label>Name</label><div class="form-input"><input type="text" id="providerName" class="form-control" placeholder="My supplier"></div></div>
+              <div class="form-row"><label>Xtream URL</label><div class="form-input"><input type="text" id="providerUrl" class="form-control" placeholder="http://host:port/?username=u&password=p"></div></div>
+              <div class="form-row"><label>Default bouquet</label><div class="form-input"><select id="providerBouquet" class="form-control"><option value="0">— None —</option></select></div></div>
+              <div class="form-row"><label>Auto-update (hours)</label><div class="form-input">
+                <select id="providerFreq" class="form-control">
+                  <option value="0">Off</option>
+                  <option value="1">Every 1 hour</option>
+                  <option value="3">Every 3 hours</option>
+                  <option value="6">Every 6 hours</option>
+                  <option value="12">Every 12 hours</option>
+                  <option value="24">Every 24 hours</option>
+                </select>
+              </div></div>
+            </div>
+            <div class="modal-footer" style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+              <button class="btn btn-secondary" onclick="APP.validateProviderForm()">Test connection</button>
+              <button class="btn btn-primary" onclick="APP.saveProvider()">Save</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- CATEGORIES: channels (live) -->
+        <section class="page" id="page-categories-channels" style="display:none">
+          <div class="page-header">
+            <h2>Channel categories</h2>
+            <div class="page-actions"><button class="btn btn-primary" onclick="APP.openCategoryModal()">+ Add category</button></div>
+          </div>
+          <div class="table-responsive">
+            <table class="data-table" id="categoriesTableChannels">
+              <thead><tr><th>ID</th><th>Name</th><th>Order</th><th width="120">Actions</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="page" id="page-categories-movies" style="display:none">
+          <div class="page-header">
+            <h2>Movie categories</h2>
+            <div class="page-actions"><button class="btn btn-primary" onclick="APP.openCategoryModal()">+ Add category</button></div>
+          </div>
+          <div class="table-responsive">
+            <table class="data-table" id="categoriesTableMovies">
+              <thead><tr><th>ID</th><th>Name</th><th>Order</th><th width="120">Actions</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="page" id="page-categories-series" style="display:none">
+          <div class="page-header">
+            <h2>Series categories</h2>
+            <div class="page-actions"><button class="btn btn-primary" onclick="APP.openCategoryModal()">+ Add category</button></div>
+          </div>
+          <div class="table-responsive">
+            <table class="data-table" id="categoriesTableSeries">
+              <thead><tr><th>ID</th><th>Name</th><th>Order</th><th width="120">Actions</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- CATEGORY MODAL -->
+        <div class="modal-overlay" id="categoryModal" style="display:none">
+          <div class="modal-box">
+            <div class="modal-header"><h3 id="catModalTitle">Add Category</h3><button class="modal-close" onclick="APP.closeCategoryModal()">&times;</button></div>
+            <div class="modal-body">
+              <input type="hidden" id="catFormId">
+              <div class="form-row"><label>Name</label><div class="form-input"><input type="text" id="catName" class="form-control"></div></div>
+              <div class="form-row" id="catTypeRow"><label>Type</label><div class="form-input">
+                <select id="catType" class="form-control"><option value="live">Live</option><option value="movie">Movie</option><option value="series">Series</option></select>
+              </div></div>
+              <div class="form-row"><label>Order</label><div class="form-input"><input type="number" id="catOrder" class="form-control" value="0"></div></div>
+            </div>
+            <div class="modal-footer"><button class="btn btn-secondary" onclick="APP.closeCategoryModal()">Cancel</button><button class="btn btn-primary" onclick="APP.saveCategory()">Save</button></div>
+          </div>
+        </div>
+
+        <!-- BOUQUETS -->
+        <section class="page" id="page-bouquets" style="display:none">
+          <div class="page-header">
+            <h2>Bouquets</h2>
+            <div class="page-actions"><button class="btn btn-primary" onclick="APP.openBouquetModal()">+ Add Bouquet</button></div>
+          </div>
+          <div class="table-responsive">
+            <table class="data-table" id="bouquetsTable">
+              <thead><tr><th>ID</th><th>Name</th><th width="120">Actions</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+
+        <div class="modal-overlay" id="bouquetModal" style="display:none">
+          <div class="modal-box">
+            <div class="modal-header"><h3 id="bqModalTitle">Add Bouquet</h3><button class="modal-close" onclick="APP.closeBouquetModal()">&times;</button></div>
+            <div class="modal-body">
+              <input type="hidden" id="bqFormId">
+              <div class="form-row"><label>Name</label><div class="form-input"><input type="text" id="bqName" class="form-control"></div></div>
+            </div>
+            <div class="modal-footer"><button class="btn btn-secondary" onclick="APP.closeBouquetModal()">Cancel</button><button class="btn btn-primary" onclick="APP.saveBouquet()">Save</button></div>
+          </div>
+        </div>
+
+        <!-- PACKAGES -->
+        <section class="page" id="page-packages" style="display:none">
+          <div class="page-header">
+            <h2>Packages</h2>
+            <div class="page-actions"><button class="btn btn-primary" onclick="APP.openPackageModal()">+ Add Package</button></div>
+          </div>
+          <div class="table-responsive">
+            <table class="data-table" id="packagesTable">
+              <thead><tr><th>ID</th><th>Name</th><th>Official credits</th><th>Max conn</th><th>Bouquets</th><th width="140">Actions</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+
+        <div class="modal-overlay" id="packageModal" style="display:none">
+          <div class="modal-box modal-xl">
+            <div class="modal-header"><h3 id="pkgModalTitle">Add Package</h3><button class="modal-close" onclick="APP.closePackageModal()">&times;</button></div>
+            <div class="modal-body" style="padding-top:12px">
+              <input type="hidden" id="pkgFormId">
+              <div class="wizard-tabs">
+                <button type="button" class="wizard-tab active" data-tab="pkg-details">Details</button>
+                <button type="button" class="wizard-tab" data-tab="pkg-options">Options</button>
+                <button type="button" class="wizard-tab" data-tab="pkg-groups">Groups</button>
+                <button type="button" class="wizard-tab" data-tab="pkg-bouquets">Bouquets</button>
+              </div>
+              <div class="wizard-panel active" id="tab-pkg-details">
+                <div class="form-row"><label>Package name</label><div class="form-input"><input type="text" id="pkgName" class="form-control" placeholder="Package name"></div></div>
+                <h4 class="form-section-title">Trial package</h4>
+                <div class="form-row"><label>Enabled</label><div class="form-input"><label class="toggle"><input type="checkbox" id="pkgTrialEnabled"><span class="toggle-slider"></span></label></div></div>
+                <div class="form-row"><label>Credit cost</label><div class="form-input"><input type="number" step="0.01" id="pkgTrialCredits" class="form-control" value="0"></div></div>
+                <div class="form-row"><label>Duration</label><div class="form-input" style="display:flex;gap:8px;align-items:center">
+                  <input type="number" id="pkgTrialDuration" class="form-control" value="0" style="max-width:120px">
+                  <select id="pkgTrialDurationIn" class="form-control" style="max-width:140px">
+                    <option value="hour">Hours</option><option value="day">Days</option><option value="month">Months</option>
+                  </select>
+                </div></div>
+                <h4 class="form-section-title">Standard package</h4>
+                <div class="form-row"><label>Enabled</label><div class="form-input"><label class="toggle"><input type="checkbox" id="pkgOfficialEnabled" checked><span class="toggle-slider"></span></label></div></div>
+                <div class="form-row"><label>Credit cost</label><div class="form-input"><input type="number" step="0.01" id="pkgOfficialCredits" class="form-control" value="0"></div></div>
+                <div class="form-row"><label>Duration</label><div class="form-input" style="display:flex;gap:8px;align-items:center">
+                  <input type="number" id="pkgOfficialDuration" class="form-control" value="0" style="max-width:120px">
+                  <select id="pkgOfficialDurationIn" class="form-control" style="max-width:140px">
+                    <option value="hour">Hours</option><option value="day">Days</option><option value="month" selected>Months</option>
+                  </select>
+                </div></div>
+              </div>
+              <div class="wizard-panel" id="tab-pkg-options">
+                <div class="form-row"><label>MAG device</label><div class="form-input"><label class="toggle"><input type="checkbox" id="pkgIsMag"><span class="toggle-slider"></span></label></div></div>
+                <div class="form-row"><label>Enigma device</label><div class="form-input"><label class="toggle"><input type="checkbox" id="pkgIsE2"><span class="toggle-slider"></span></label></div></div>
+                <div class="form-row"><label>Standard line</label><div class="form-input"><label class="toggle"><input type="checkbox" id="pkgIsLine" checked><span class="toggle-slider"></span></label></div></div>
+                <div class="form-row"><label>Lock to ISP</label><div class="form-input"><label class="toggle"><input type="checkbox" id="pkgLockIsp"><span class="toggle-slider"></span></label></div></div>
+                <div class="form-row"><label>Restreamer</label><div class="form-input"><label class="toggle"><input type="checkbox" id="pkgIsRestreamer"><span class="toggle-slider"></span></label></div></div>
+                <div class="form-row"><label>Verify compatibility</label><div class="form-input"><label class="toggle"><input type="checkbox" id="pkgVerifyCompat" checked><span class="toggle-slider"></span></label></div></div>
+                <div class="form-row"><label>Forced connection</label><div class="form-input"><select id="pkgForcedConnection" class="form-control">
+                  <option value="disabled">Disabled</option><option value="strict">Strict</option><option value="off">Off</option>
+                </select></div></div>
+                <div class="form-row"><label>Forced country</label><div class="form-input"><input type="text" id="pkgForcedCountry" class="form-control" placeholder="Empty = off"></div></div>
+                <div class="form-row"><label>Max connections</label><div class="form-input"><input type="number" min="1" id="pkgMaxConnections" class="form-control" value="1"></div></div>
+                <div class="form-row"><label>Access output</label><div class="form-input" style="display:flex;gap:16px;flex-wrap:wrap">
+                  <label><input type="checkbox" id="pkgOutM3u8"> HLS (m3u8)</label>
+                  <label><input type="checkbox" id="pkgOutTs"> MPEG-TS</label>
+                  <label><input type="checkbox" id="pkgOutRtmp"> RTMP</label>
+                </div></div>
+              </div>
+              <div class="wizard-panel" id="tab-pkg-groups">
+                <p class="text-muted" style="margin-bottom:8px">Select which user groups can use this package.</p>
+                <div class="table-responsive" style="max-height:320px;overflow:auto">
+                  <table class="data-table" id="pkgGroupsTable">
+                    <thead><tr><th width="40"></th><th>ID</th><th>Group name</th></tr></thead>
+                    <tbody></tbody>
+                  </table>
+                </div>
+              </div>
+              <div class="wizard-panel" id="tab-pkg-bouquets">
+                <p class="text-muted" style="margin-bottom:8px">Select bouquets included in this package.</p>
+                <div class="table-responsive" style="max-height:360px;overflow:auto">
+                  <table class="data-table" id="pkgBouquetsTable">
+                    <thead><tr><th width="40"></th><th>ID</th><th>Bouquet name</th><th>Streams</th><th>Movies</th><th>Series</th><th>Stations</th></tr></thead>
+                    <tbody></tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+            <div class="modal-footer" style="justify-content:space-between;flex-wrap:wrap;gap:8px">
+              <div>
+                <button type="button" class="btn btn-secondary" id="pkgBtnPrev" onclick="APP.pkgWizardPrev()" style="display:none">Previous</button>
+              </div>
+              <div style="display:flex;gap:8px;align-items:center">
+                <button type="button" class="btn btn-secondary" id="pkgBtnToggleGroups" onclick="APP.togglePackageGroups()" style="display:none">Toggle groups</button>
+                <button type="button" class="btn btn-secondary" id="pkgBtnToggleBouquets" onclick="APP.togglePackageBouquets()" style="display:none">Toggle bouquets</button>
+                <button type="button" class="btn btn-secondary" onclick="APP.closePackageModal()">Cancel</button>
+                <button type="button" class="btn btn-primary" id="pkgBtnNext" onclick="APP.pkgWizardNext()">Next</button>
+                <button type="button" class="btn btn-primary" id="pkgBtnSave" onclick="APP.savePackage()" style="display:none">Save</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- RESELLERS -->
+        <section class="page" id="page-resellers" style="display:none">
+          <div class="page-header">
+            <h2>Resellers</h2>
+            <div class="page-actions"><button class="btn btn-primary" onclick="APP.openResellerModal()">+ Add Reseller</button></div>
+          </div>
+          <div class="table-responsive">
+            <table class="data-table" id="resellersTable">
+              <thead><tr><th>ID</th><th>Username</th><th>Email</th><th>Credits</th><th>Status</th><th width="120">Actions</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+
+        <div class="modal-overlay" id="resellerModal" style="display:none">
+          <div class="modal-box">
+            <div class="modal-header"><h3 id="rslModalTitle">Add Reseller</h3><button class="modal-close" onclick="APP.closeResellerModal()">&times;</button></div>
+            <div class="modal-body">
+              <input type="hidden" id="rslFormId">
+              <div class="form-row"><label>Username</label><div class="form-input"><input type="text" id="rslUsername" class="form-control"></div></div>
+              <div class="form-row"><label>Password</label><div class="form-input"><input type="password" id="rslPassword" class="form-control"></div></div>
+              <div class="form-row"><label>Email</label><div class="form-input"><input type="text" id="rslEmail" class="form-control"></div></div>
+              <div class="form-row"><label>Credits</label><div class="form-input"><input type="number" id="rslCredits" class="form-control" value="0"></div></div>
+            </div>
+            <div class="modal-footer"><button class="btn btn-secondary" onclick="APP.closeResellerModal()">Cancel</button><button class="btn btn-primary" onclick="APP.saveReseller()">Save</button></div>
+          </div>
+        </div>
+
+        <!-- PANEL USERS -->
+        <section class="page" id="page-users" style="display:none">
+          <div class="page-header">
+            <h2>Panel Users</h2>
+            <div class="page-actions"><button class="btn btn-primary" onclick="APP.openUserModal()">+ Add User</button></div>
+          </div>
+          <div class="table-responsive">
+            <table class="data-table" id="usersTable">
+              <thead><tr><th>ID</th><th>Username</th><th>Email</th><th>Group</th><th>Status</th><th width="120">Actions</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+
+        <div class="modal-overlay" id="userModal" style="display:none">
+          <div class="modal-box">
+            <div class="modal-header"><h3 id="usrModalTitle">Add User</h3><button class="modal-close" onclick="APP.closeUserModal()">&times;</button></div>
+            <div class="modal-body">
+              <input type="hidden" id="usrFormId">
+              <div class="form-row"><label>Username</label><div class="form-input"><input type="text" id="usrUsername" class="form-control"></div></div>
+              <div class="form-row"><label>Password</label><div class="form-input"><input type="password" id="usrPassword" class="form-control"></div></div>
+              <div class="form-row"><label>Email</label><div class="form-input"><input type="text" id="usrEmail" class="form-control"></div></div>
+            </div>
+            <div class="modal-footer"><button class="btn btn-secondary" onclick="APP.closeUserModal()">Cancel</button><button class="btn btn-primary" onclick="APP.saveUser()">Save</button></div>
+          </div>
+        </div>
+
+        <!-- EPG -->
+        <section class="page" id="page-epg" style="display:none">
+          <div class="page-header">
+            <h2>EPG Sources</h2>
+            <div class="page-actions">
+              <button class="btn btn-primary" onclick="APP.openEpgModal()">+ Add Source</button>
+              <button class="btn btn-secondary" onclick="APP.refreshEpg()">Refresh All</button>
+            </div>
+          </div>
+          <div class="table-responsive">
+            <table class="data-table" id="epgTable">
+              <thead><tr><th>ID</th><th>Name</th><th>URL</th><th>Last Updated</th><th width="100">Actions</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+
+        <div class="modal-overlay" id="epgModal" style="display:none">
+          <div class="modal-box">
+            <div class="modal-header"><h3>Add EPG Source</h3><button class="modal-close" onclick="APP.closeEpgModal()">&times;</button></div>
+            <div class="modal-body">
+              <div class="form-row"><label>Name</label><div class="form-input"><input type="text" id="epgName" class="form-control"></div></div>
+              <div class="form-row"><label>URL</label><div class="form-input"><input type="text" id="epgUrl" class="form-control" placeholder="http://..."></div></div>
+            </div>
+            <div class="modal-footer"><button class="btn btn-secondary" onclick="APP.closeEpgModal()">Cancel</button><button class="btn btn-primary" onclick="APP.saveEpg()">Save</button></div>
+          </div>
+        </div>
+
+        <!-- SERVERS (LB / edge) -->
+        <section class="page" id="page-servers" style="display:none">
+          <div class="page-header">
+            <h2>Servers</h2>
+            <div class="page-actions">
+              <button type="button" class="btn btn-secondary" onclick="APP.exportNginxUpstream()">Export Nginx upstream</button>
+              <button class="btn btn-primary" onclick="APP.openServerModal(null)">+ Add server</button>
+            </div>
+          </div>
+          <p class="text-muted" style="font-size:0.85rem;margin-bottom:12px">Public hosts used in playlists and stream URLs. Point DNS to your load balancer; Nginx proxies to edge origins.</p>
+          <div class="table-responsive">
+            <table class="data-table" id="serversTable">
+              <thead>
+                <tr>
+                  <th>Status</th><th>Name</th><th>Role</th><th>Public host</th><th>Public IP</th>
+                  <th>Conn.</th><th>Network</th><th>CPU</th><th>Mem</th><th width="140">Actions</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+
+        <div class="modal-overlay" id="serverModal" style="display:none">
+          <div class="modal-box modal-box-wide">
+            <div class="modal-header">
+              <h3 id="serverModalTitle">Server</h3>
+              <button class="modal-close" onclick="APP.closeServerModal()">&times;</button>
+            </div>
+            <div class="xc-tabs server-modal-tabs">
+              <button type="button" class="xc-tab active" data-srv-tab="details" onclick="APP.switchServerModalTab('details')">Details</button>
+              <button type="button" class="xc-tab" data-srv-tab="domains" onclick="APP.switchServerModalTab('domains')">Domains</button>
+              <button type="button" class="xc-tab" data-srv-tab="advanced" onclick="APP.switchServerModalTab('advanced')">Advanced</button>
+              <button type="button" class="xc-tab" data-srv-tab="performance" onclick="APP.switchServerModalTab('performance')">Performance</button>
+              <button type="button" class="xc-tab" data-srv-tab="ssl" onclick="APP.switchServerModalTab('ssl')">SSL</button>
+              <button type="button" class="xc-tab" data-srv-tab="install" id="serverTabInstall" onclick="APP.switchServerModalTab('install')" style="display:none">Install</button>
+            </div>
+            <div class="modal-body xc-tab-panel" id="server-panel-details" data-srv-panel="details">
+              <input type="hidden" id="srvFormId" value="">
+              <div class="form-row"><label>Name</label><div class="form-input"><input type="text" id="srvName" class="form-control" placeholder="Edge EU-1"></div></div>
+              <div class="form-row"><label>Role</label><div class="form-input">
+                <select id="srvRole" class="form-control">
+                  <option value="main">Main</option>
+                  <option value="lb">Load balancer</option>
+                  <option value="edge">Edge / stream</option>
+                </select>
+              </div></div>
+              <div class="form-row"><label>Public host</label><div class="form-input"><input type="text" id="srvPublicHost" class="form-control" placeholder="lb.example.com"></div></div>
+              <div class="form-row"><label>Public IP</label><div class="form-input"><input type="text" id="srvPublicIp" class="form-control"></div></div>
+              <div class="form-row"><label>Private IP</label><div class="form-input"><input type="text" id="srvPrivateIp" class="form-control"></div></div>
+              <div class="form-row"><label>Max clients</label><div class="form-input"><input type="number" id="srvMaxClients" class="form-control" min="0" value="0" placeholder="0 = unlimited"></div></div>
+              <div class="form-row"><label>Sort order</label><div class="form-input"><input type="number" id="srvSortOrder" class="form-control" value="0"></div></div>
+              <div class="form-row"><label>Network cap (Mbps)</label><div class="form-input"><input type="number" id="srvNetworkCap" class="form-control" min="0" value="0" placeholder="0 = none"></div></div>
+              <div class="form-row"><label>Enabled</label><div class="form-input"><label class="toggle"><input type="checkbox" id="srvEnabled" checked><span class="toggle-slider"></span></label></div></div>
+              <div class="form-row"><label>Proxied</label><div class="form-input"><label class="toggle"><input type="checkbox" id="srvProxied"><span class="toggle-slider"></span></label></div></div>
+              <div class="form-row"><label>Timeshift only</label><div class="form-input"><label class="toggle"><input type="checkbox" id="srvTimeshift"><span class="toggle-slider"></span></label></div></div>
+            </div>
+            <div class="modal-body xc-tab-panel" id="server-panel-domains" data-srv-panel="domains" style="display:none">
+              <p class="text-muted" style="font-size:0.8rem;margin-bottom:8px">One hostname per line. The first line is treated as primary unless you reorder in DB later.</p>
+              <textarea id="srvDomains" class="form-control" rows="8" placeholder="lb.example.com / cdn.example.com (one per line)"></textarea>
+            </div>
+            <div class="modal-body xc-tab-panel" id="server-panel-advanced" data-srv-panel="advanced" style="display:none">
+              <div class="form-row"><label>meta_json</label><div class="form-input"><textarea id="srvMetaJson" class="form-control" rows="10" placeholder="{ }"></textarea></div></div>
+            </div>
+            <div class="modal-body xc-tab-panel" id="server-panel-performance" data-srv-panel="performance" style="display:none">
+              <p class="text-muted" style="font-size:0.85rem">Values come from the remote agent’s last heartbeat.</p>
+              <div class="form-row"><label>Last heartbeat</label><div class="form-input" id="srvPerfHeartbeat">—</div></div>
+              <div class="form-row"><label>Agent version</label><div class="form-input" id="srvPerfAgentVer">—</div></div>
+              <div class="server-gauges" id="srvPerfGauges">
+                <div class="server-gauge"><span>CPU</span><div class="server-gauge-bar"><div class="server-gauge-fill" id="srvGaugeCpu" style="width:0%"></div></div><span id="srvGaugeCpuLbl">—</span></div>
+                <div class="server-gauge"><span>RAM</span><div class="server-gauge-bar"><div class="server-gauge-fill" id="srvGaugeMem" style="width:0%"></div></div><span id="srvGaugeMemLbl">—</span></div>
+                <div class="server-gauge"><span>Net</span><div class="server-gauge-bar"><div class="server-gauge-fill" id="srvGaugeNet" style="width:0%"></div></div><span id="srvGaugeNetLbl">—</span></div>
+                <div class="server-gauge"><span>Ping</span><div class="server-gauge-bar"><div class="server-gauge-fill" id="srvGaugePing" style="width:0%"></div></div><span id="srvGaugePingLbl">—</span></div>
+              </div>
+            </div>
+            <div class="modal-body xc-tab-panel" id="server-panel-ssl" data-srv-panel="ssl" style="display:none">
+              <p class="text-muted" style="font-size:0.9rem">Terminate TLS on Nginx or your edge. This panel does not proxy video bytes. Paste certificates on the LB host and use the exported upstream block to reach origins.</p>
+            </div>
+            <div class="modal-body xc-tab-panel" id="server-panel-install" data-srv-panel="install" style="display:none">
+              <p class="text-muted" style="font-size:0.85rem">Enable in <strong>Settings → Streaming → Enable Server Provisioning</strong> (requires <code>ENABLE_SERVER_PROVISIONING=1</code> on the panel process).</p>
+              <div id="serverInstallForm" style="display:none">
+                <p class="text-muted" style="font-size:0.8rem;margin-bottom:10px">Creates the server row if needed, installs Nginx with upstream from the panel, deploys the agent, and enables the server. Requires <code>AGENT_SECRET</code> on the panel.</p>
+                <div class="form-row"><label>LB name (new server)</label><div class="form-input"><input type="text" id="srvLbName" class="form-control" placeholder="OVH LB1"></div></div>
+                <div class="form-row"><label>Public host (DNS / M3U)</label><div class="form-input"><input type="text" id="srvProvisionPublicHost" class="form-control" placeholder="lb.example.com"></div></div>
+                <div class="form-row"><label>Panel URL (agent)</label><div class="form-input"><input type="text" id="srvPanelUrl" class="form-control" placeholder="https://panel.example.com"></div></div>
+                <div class="form-row"><label>SSH host</label><div class="form-input"><input type="text" id="srvSshHost" class="form-control" placeholder="IP or hostname"></div></div>
+                <div class="form-row"><label>Port</label><div class="form-input"><input type="number" id="srvSshPort" class="form-control" value="22"></div></div>
+                <div class="form-row"><label>User</label><div class="form-input"><input type="text" id="srvSshUser" class="form-control" value="root"></div></div>
+                <div class="form-row"><label>Password</label><div class="form-input"><input type="password" id="srvSshPassword" class="form-control" autocomplete="off"></div></div>
+                <div class="form-row"><div class="form-input"><button type="button" class="btn btn-primary" onclick="APP.startServerProvision()">Run full LB install</button></div></div>
+                <pre id="srvProvisionLog" class="server-provision-log"></pre>
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-secondary" onclick="APP.closeServerModal()">Cancel</button>
+              <button type="button" class="btn btn-primary" onclick="APP.saveServer()">Save</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- SETTINGS -->
+        <section class="page page-settings-saas" id="page-settings" style="display:none">
+          <div class="settings-saas-header">
+            <h2 class="settings-saas-title">Settings</h2>
+            <div class="page-actions"><button class="btn btn-primary" onclick="APP.saveSettings()">Save All Settings</button></div>
+          </div>
+          <div class="settings-saas-card">
+            <div class="settings-tabs" id="settingsTabBar" role="tablist">
+              <button type="button" class="settings-tab active" data-settings-tab="general" onclick="APP.switchSettingsTab('general')">General</button>
+              <button type="button" class="settings-tab" data-settings-tab="streaming" onclick="APP.switchSettingsTab('streaming')">Streaming</button>
+              <button type="button" class="settings-tab" data-settings-tab="advanced" onclick="APP.switchSettingsTab('advanced')">Advanced</button>
+            </div>
+            <div class="settings-tab-panel active" id="settings-panel-general" data-settings-panel="general">
+              <h3 class="settings-section-title">Preferences</h3>
+              <div id="settingsFormGeneral"></div>
+            </div>
+            <div class="settings-tab-panel" id="settings-panel-streaming" data-settings-panel="streaming" style="display:none">
+              <h3 class="settings-section-title">Streaming performance</h3>
+              <p class="settings-hint">Tune MPEG-TS prebuffer, ingest, and latency. Values are stored in the database; environment variables apply only when a field is unset in the DB.</p>
+              <h3 class="settings-section-title" style="margin-top:1.25rem">Server provisioning (SSH)</h3>
+              <p class="settings-hint">Master switch: set <code>ENABLE_SERVER_PROVISIONING=1</code> on the panel process. Then enable below to allow admins to run remote load-balancer install (Servers → Add server → Install). Requires <code>AGENT_SECRET</code> for the agent.</p>
+              <div class="form-row"><label>Enable Server Provisioning</label><div class="form-input" style="flex-wrap:wrap;align-items:center;gap:10px">
+                <label class="toggle"><input type="checkbox" id="spProvisioningEnabled"><span class="toggle-slider"></span></label>
+                <span class="toggle-label text-muted" id="spProvisioningEnvHint" style="font-size:0.85rem"></span>
+              </div></div>
+              <div id="streamingPerfForm">
+                <div class="form-row" style="flex-wrap:wrap;gap:8px;margin-bottom:10px">
+                  <button type="button" class="btn btn-xs btn-secondary" onclick="APP.applyStreamingPreset('ultra_fast')">Ultra Fast</button>
+                  <button type="button" class="btn btn-xs btn-secondary" onclick="APP.applyStreamingPreset('balanced')">Balanced</button>
+                  <button type="button" class="btn btn-xs btn-secondary" onclick="APP.applyStreamingPreset('stable')">Stable</button>
+                </div>
+                <div class="form-row"><label>Prebuffer</label><div class="form-input"><label class="toggle"><input type="checkbox" id="spPrebufferEnabled"><span class="toggle-slider"></span></label><span class="toggle-label">Ring buffer for instant TS attach</span></div></div>
+                <div class="form-row"><label>Prebuffer size (MB)</label><div class="form-input" style="align-items:center;gap:10px">
+                  <input type="range" id="spPrebufferMbRange" min="1" max="16" step="1" style="flex:1;max-width:220px">
+                  <input type="number" id="spPrebufferMb" class="form-control" style="max-width:80px" min="1" max="16" step="1">
+                </div></div>
+                <div class="form-row"><label>On-demand start buffer (bytes)</label><div class="form-input"><input type="number" id="spOdMinBytes" class="form-control" min="0" step="1024" style="max-width:180px"></div></div>
+                <div class="form-row"><label>On-demand max wait (ms)</label><div class="form-input"><input type="number" id="spOdWaitMs" class="form-control" min="100" max="60000" step="100" style="max-width:120px"></div></div>
+                <div class="form-row"><label>Ingest style</label><div class="form-input">
+                  <select id="spIngestStyle" class="form-control" style="max-width:220px">
+                    <option value="webapp">Webapp (fast)</option>
+                    <option value="xc">XC (balanced)</option>
+                    <option value="safe">Safe (stable)</option>
+                  </select>
+                </div></div>
+                <div class="form-row"><label>Low latency demux</label><div class="form-input"><label class="toggle"><input type="checkbox" id="spLowLatency"><span class="toggle-slider"></span></label></div></div>
+                <div class="form-row"><label>Minimal ingest</label><div class="form-input"><label class="toggle"><input type="checkbox" id="spMinimalIngest"><span class="toggle-slider"></span></label></div></div>
+                <div class="form-row"><label>Pre-warm feature</label><div class="form-input"><label class="toggle"><input type="checkbox" id="spPrewarmEnabled"><span class="toggle-slider"></span></label><span class="toggle-label">Allow per-channel “always on” / boot start</span></div></div>
+                <div class="form-row"><div class="form-input"><button type="button" class="btn btn-primary" onclick="APP.saveStreamingPerformance()">Save Streaming Performance</button></div></div>
+              </div>
+            </div>
+            <div class="settings-tab-panel" id="settings-panel-advanced" data-settings-panel="advanced" style="display:none">
+              <h3 class="settings-section-title">All keys</h3>
+              <p class="settings-hint">Raw key/value pairs. Prefer General for common options.</p>
+              <div id="settingsForm"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- SECURITY -->
+        <section class="page" id="page-security" style="display:none">
+          <div class="page-header"><h2>Security</h2></div>
+          <div class="card">
+            <div class="card-header">Blocked IPs <button class="btn btn-xs btn-primary float-right" onclick="APP.addBlockedIp()">+ Add</button></div>
+            <div class="card-body">
+              <table class="data-table" id="blockedIpsTable">
+                <thead><tr><th>ID</th><th>IP</th><th>Notes</th><th>Date</th><th width="80">Actions</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="card mt-3">
+            <div class="card-header">Blocked User Agents <button class="btn btn-xs btn-primary float-right" onclick="APP.addBlockedUa()">+ Add</button></div>
+            <div class="card-body">
+              <table class="data-table" id="blockedUasTable">
+                <thead><tr><th>ID</th><th>User Agent</th><th>Notes</th><th>Date</th><th width="80">Actions</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- LOGS -->
+        <section class="page" id="page-logs" style="display:none">
+          <div class="page-header"><h2>Logs</h2></div>
+          <div class="wizard-tabs">
+            <button class="wizard-tab active" data-tab="panel-logs">Panel Logs</button>
+            <button class="wizard-tab" data-tab="activity-logs">Activity</button>
+          </div>
+          <div class="wizard-panel active" id="tab-panel-logs">
+            <table class="data-table" id="panelLogsTable">
+              <thead><tr><th>ID</th><th>Action</th><th>Target</th><th>Details</th><th>Date</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div class="wizard-panel" id="tab-activity-logs">
+            <table class="data-table" id="activityLogsTable">
+              <thead><tr><th>ID</th><th>User</th><th>Stream</th><th>IP</th><th>UA</th><th>Date</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="page" id="page-access-codes" style="display:none">
+          <div class="page-header">
+            <h2>Access Codes</h2>
+            <div class="page-actions"><button class="btn btn-primary" onclick="APP.openAccessCodeModal()">+ Add Code</button></div>
+          </div>
+          <p style="color:#8b949e;font-size:.9rem;margin-bottom:12px">
+            Each login gateway is URL-based. Example: <code>https://domain.com/myadmincode</code> or <code>https://domain.com/myresellercode</code>.
+          </p>
+          <div class="table-responsive">
+            <table class="data-table" id="accessCodesTable">
+              <thead><tr><th>ID</th><th>Code</th><th>Role</th><th>Enabled</th><th>Description</th><th>Last Used</th><th width="200">Actions</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+
+        <div class="modal-overlay" id="accessCodeModal" style="display:none">
+          <div class="modal-box">
+            <div class="modal-header"><h3 id="accessCodeModalTitle">Add Access Code</h3><button class="modal-close" onclick="APP.closeAccessCodeModal()">&times;</button></div>
+            <div class="modal-body">
+              <input type="hidden" id="accessCodeId">
+              <div class="form-row"><label>Code</label><div class="form-input"><input type="text" id="accessCodeValue" class="form-control" placeholder="admincode123"></div></div>
+              <div class="form-row"><label>Role</label><div class="form-input">
+                <select id="accessCodeRole" class="form-control">
+                  <option value="admin">Admin</option>
+                  <option value="reseller">Reseller</option>
+                </select>
+              </div></div>
+              <div class="form-row"><label>Enabled</label><div class="form-input">
+                <select id="accessCodeEnabled" class="form-control"><option value="1">Yes</option><option value="0">No</option></select>
+              </div></div>
+              <div class="form-row"><label>Description</label><div class="form-input"><input type="text" id="accessCodeDescription" class="form-control" placeholder="Main admin portal"></div></div>
+            </div>
+            <div class="modal-footer"><button class="btn btn-secondary" onclick="APP.closeAccessCodeModal()">Cancel</button><button class="btn btn-primary" onclick="APP.saveAccessCode()">Save</button></div>
+          </div>
+        </div>
+
+        <section class="page" id="page-db-manager" style="display:none">
+          <div class="page-header">
+            <h2>Database Manager</h2>
+            <div class="page-actions">
+              <button class="btn btn-secondary" onclick="APP.loadDbManager()">Refresh</button>
+              <button class="btn btn-warning" onclick="APP.runDbRepair()">Repair Database</button>
+              <button class="btn btn-primary" onclick="APP.runDbOptimize()">Optimize Database</button>
+            </div>
+          </div>
+          <div class="stats-grid">
+            <div class="stat-card"><div class="stat-value" id="dbSizeMb">0 MB</div><div class="stat-label">DB Size</div></div>
+            <div class="stat-card"><div class="stat-value" id="dbTotalTables">0</div><div class="stat-label">Total Tables</div></div>
+            <div class="stat-card"><div class="stat-value" id="dbConnections">0</div><div class="stat-label">Active Connections</div></div>
+            <div class="stat-card"><div class="stat-value" id="dbSlowQueries">0</div><div class="stat-label">Slow Queries</div></div>
+          </div>
+          <div class="card mt-3">
+            <div class="card-header">Table Sizes (MB)</div>
+            <div class="card-body">
+              <table class="data-table" id="dbTableSizes">
+                <thead><tr><th>Table</th><th>Size MB</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+      </div>
+    </main>
+  </div>
+
+  <!-- PLAYLIST DOWNLOAD MODAL -->
+  <div class="modal-overlay" id="playlistModal" style="display:none">
+    <div class="modal-box" style="max-width:600px">
+      <div class="modal-header">
+        <h3>Download Playlist</h3>
+        <button class="modal-close" onclick="APP.closePlaylistModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="playlist-info-group">
+          <label>Server URL</label>
+          <div class="playlist-url-row">
+            <input type="text" id="plServerUrl" class="form-control" readonly>
+            <button class="btn btn-xs btn-secondary" onclick="APP.copyPlaylistField('plServerUrl')">Copy</button>
+          </div>
+        </div>
+        <div class="playlist-info-group">
+          <label>Username</label>
+          <div class="playlist-url-row">
+            <input type="text" id="plUsername" class="form-control" readonly>
+            <button class="btn btn-xs btn-secondary" onclick="APP.copyPlaylistField('plUsername')">Copy</button>
+          </div>
+        </div>
+        <div class="playlist-info-group">
+          <label>Password</label>
+          <div class="playlist-url-row">
+            <input type="text" id="plPassword" class="form-control" readonly>
+            <button class="btn btn-xs btn-secondary" onclick="APP.copyPlaylistField('plPassword')">Copy</button>
+          </div>
+        </div>
+        <hr style="border-color:#30363d;margin:12px 0">
+        <div class="playlist-info-group">
+          <label>M3U Playlist URL</label>
+          <div class="playlist-url-row">
+            <input type="text" id="plM3uUrl" class="form-control" readonly>
+            <button class="btn btn-xs btn-secondary" onclick="APP.copyPlaylistField('plM3uUrl')">Copy</button>
+          </div>
+        </div>
+        <div class="playlist-info-group">
+          <label>EPG URL</label>
+          <div class="playlist-url-row">
+            <input type="text" id="plEpgUrl" class="form-control" readonly>
+            <button class="btn btn-xs btn-secondary" onclick="APP.copyPlaylistField('plEpgUrl')">Copy</button>
+          </div>
+        </div>
+        <div class="playlist-info-group">
+          <label>Xtream API URL</label>
+          <div class="playlist-url-row">
+            <input type="text" id="plXtreamUrl" class="form-control" readonly>
+            <button class="btn btn-xs btn-secondary" onclick="APP.copyPlaylistField('plXtreamUrl')">Copy</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast-container"></div>
+  <script src="/js/app.js"></script>
 </body>
 </html>
