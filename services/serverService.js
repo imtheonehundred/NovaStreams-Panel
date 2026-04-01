@@ -167,6 +167,9 @@ async function createServer(data) {
   const timeshiftOnly = data.timeshift_only ? 1 : 0;
   const networkCap = parseInt(data.network_mbps_cap, 10) || 0;
   const sortOrder = parseInt(data.sort_order, 10) || 0;
+  const runtimeEnabled = data.runtime_enabled ? 1 : 0;
+  const proxyEnabled = data.proxy_enabled ? 1 : 0;
+  const controllerEnabled = data.controller_enabled ? 1 : 0;
   let metaObj = data.meta_json !== undefined ? parseMeta(data.meta_json) : {};
   metaObj = buildServerMeta(data, metaObj);
   const metaJson = Object.keys(metaObj).length ? JSON.stringify(metaObj) : null;
@@ -210,7 +213,7 @@ async function createServer(data) {
   const id = await insert(
     `INSERT INTO streaming_servers (
       name, role, public_host, public_ip, private_ip, max_clients, enabled, proxied, timeshift_only,
-      network_mbps_cap, sort_order, meta_json,
+      network_mbps_cap, sort_order, runtime_enabled, proxy_enabled, controller_enabled, meta_json,
       base_url, server_ip, dns_1, dns_2, admin_password, full_duplex, boost_fpm,
       http_port, https_m3u_lines, force_ssl_port, https_port, time_difference, ssh_port,
       network_interface, network_speed, os_info, geoip_load_balancing, geoip_countries, extra_nginx_config,
@@ -218,11 +221,11 @@ async function createServer(data) {
       connection_limit_ports, max_conn_per_ip, max_hits_normal_user, max_hits_restreamer,
       whitelist_username, block_user_minutes, auto_restart_mysql,
       isp_enabled, isp_priority, isp_allowed_names, isp_case_sensitive
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       name, role, publicHost, publicIp, privateIp,
       Number.isFinite(maxClients) && maxClients >= 0 ? maxClients : 0,
-      enabled, proxied, timeshiftOnly, networkCap, sortOrder, metaJson,
+      enabled, proxied, timeshiftOnly, networkCap, sortOrder, runtimeEnabled, proxyEnabled, controllerEnabled, metaJson,
       baseUrl, serverIp, dns1, dns2, adminPassword, fullDuplex, boostFpm,
       httpPort, httpsM3uLines, forceSslPort, httpsPort, timeDiff, sshPort,
       netInterface, netSpeed, osInfo, geoipLb, geoipCountries, extraNginx,
