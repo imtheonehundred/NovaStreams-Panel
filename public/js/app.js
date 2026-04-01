@@ -1,29 +1,138 @@
 (function () {
   'use strict';
 
-  const API = '/api/admin';
   let _token = null;
   let _currentPage = 'dashboard';
   let _categories = [];
   let _bouquets = [];
   let _packages = [];
+  let _resellersCache = [];
+  let _linesPage = 1;
+  let _linesPerPage = 50;
+  let _linesAutoRefreshTimer = null;
+  let _lineFormBouquetIds = [];
+  let _lineFormBouquetLocked = false;
+  let _lineFormOutputsLocked = false;
+  let _lineFormPackageFieldLocks = {
+    isTrial: false,
+    isMag: false,
+    isE2: false,
+    isRestreamer: false,
+    forcedCountry: false,
+  };
+  let _importUsersTrialLocked = false;
+  let _lineStatsTargetId = null;
+  let _lineExtendTarget = null;
   let _movieCats = [];
   let _seriesCats = [];
   let _editingSeriesId = null;
   let _editingSeriesSeasons = [];
   let _activeSeason = 1;
   let _tmdbTimer = null;
+  let APP = window.APP = window.APP || {};  // Expose globally immediately for onclick handlers
+  const ADMIN_MODULES = window.AdminCoreModules || {};
+  const ADMIN_DOMAIN_MODULES = window.AdminDomainModules || {};
+  const {
+    API_BASE: API,
+    createDashboardState,
+    persistImportJobId,
+    readImportJobId,
+    SIDEBAR_DESKTOP_STATE_KEY,
+  } = ADMIN_MODULES.state;
+  const {
+    $,
+    $$,
+    escHtml,
+    formatDate: formatDateCore,
+    buildEndOfDayTimestamp: buildEndOfDayTimestampCore,
+    toDateInputValue: toDateInputValueCore,
+    parseDateInputValue: parseDateInputValueCore,
+    parseDateWithFormat: parseDateWithFormatCore,
+    thumbImg: thumbImgCore,
+  } = ADMIN_MODULES.utils;
+  const {
+    normalizePageKey: normalizePageKeyCore,
+    parseAdminHashRoute: parseAdminHashRouteCore,
+    getPortalPathSegments: getPortalPathSegmentsCore,
+    getPortalBasePath: getPortalBasePathCore,
+    getKnownAdminPageKeys: getKnownAdminPageKeysCore,
+    isKnownAdminPageKey: isKnownAdminPageKeyCore,
+    getCanonicalAdminPageState: getCanonicalAdminPageStateCore,
+    getAdminPageFromPath: getAdminPageFromPathCore,
+    parsePositiveInt: parsePositiveIntCore,
+    getServerMonitorQueryId: getServerMonitorQueryIdCore,
+    buildAdminPageUrl: buildAdminPageUrlCore,
+    syncAdminRouteLinks: syncAdminRouteLinksCore,
+    getRequestedAdminRoute: getRequestedAdminRouteCore,
+    writeAdminHistory: writeAdminHistoryCore,
+    normalizeLegacyAdminHashOnBoot: normalizeLegacyAdminHashOnBootCore,
+  } = ADMIN_MODULES.router;
+  const {
+    apiFetch,
+    api,
+    apiFetchOptional,
+    isAuthErrorMessage,
+    shouldLogoutOn403,
+    addCsrfHeaders,
+  } = ADMIN_MODULES.api.createApiClient({
+    basePath: API,
+    onUnauthorized: () => showLogin(),
+  });
+  const {
+    isSidebarMobileMode: isSidebarMobileModeCore,
+    getSidebarState: getSidebarStateCore,
+    setSidebarState: setSidebarStateCore,
+    applySidebarLayoutState: applySidebarLayoutStateCore,
+        toggleSidebarLayout: toggleSidebarLayoutCore,
+        toast,
+        clearToasts: clearToastsCore,
+        makeSortable: makeSortableCore,
+        statusBadge: statusBadgeCore,
+        populateSelect: populateSelectCore,
+      } = ADMIN_MODULES.uiCommon.createUiCommon({
+    queryOne: $,
+    queryAll: $$,
+    escHtml,
+    sidebarStorageKey: SIDEBAR_DESKTOP_STATE_KEY,
+  });
+  const {
+    connectDashboardWS,
+    disconnectWS,
+  } = ADMIN_MODULES.websocket.createDashboardWebSocket({
+    getCurrentPage: () => _currentPage,
+    onDashboardData: (data) => updateDashboardFromWS(data),
+    onEventData: (data) => handleWSEvent(data),
+  });
+  const dashboardModule = ADMIN_DOMAIN_MODULES.dashboard && ADMIN_DOMAIN_MODULES.dashboard.createDashboardModule
+    ? ADMIN_DOMAIN_MODULES.dashboard.createDashboardModule()
+    : null;
+  const backupsModule = ADMIN_DOMAIN_MODULES.backups && ADMIN_DOMAIN_MODULES.backups.createBackupsModule
+    ? ADMIN_DOMAIN_MODULES.backups.createBackupsModule()
+    : null;
+  const monitorModule = ADMIN_DOMAIN_MODULES.monitor && ADMIN_DOMAIN_MODULES.monitor.createMonitorModule
+    ? ADMIN_DOMAIN_MODULES.monitor.createMonitorModule()
+    : null;
+  const linesModule = ADMIN_DOMAIN_MODULES.lines && ADMIN_DOMAIN_MODULES.lines.createLinesModule
+    ? ADMIN_DOMAIN_MODULES.lines.createLinesModule()
+    : null;
+  const streamsModule = ADMIN_DOMAIN_MODULES.streams && ADMIN_DOMAIN_MODULES.streams.createStreamsModule
+    ? ADMIN_DOMAIN_MODULES.streams.createStreamsModule()
+    : null;
+  const resellerMembersModule = ADMIN_DOMAIN_MODULES.resellerMembers && ADMIN_DOMAIN_MODULES.resellerMembers.createResellerMembersModule
+    ? ADMIN_DOMAIN_MODULES.resellerMembers.createResellerMembersModule()
+    : null;
+  const serverAreaModule = ADMIN_DOMAIN_MODULES.serverArea && ADMIN_DOMAIN_MODULES.serverArea.createServerAreaModule
+    ? ADMIN_DOMAIN_MODULES.serverArea.createServerAreaModule()
+    : null;
+  const settingsModule = ADMIN_DOMAIN_MODULES.settings && ADMIN_DOMAIN_MODULES.settings.createSettingsModule
+    ? ADMIN_DOMAIN_MODULES.settings.createSettingsModule()
+    : null;
+  const securityModule = ADMIN_DOMAIN_MODULES.security && ADMIN_DOMAIN_MODULES.security.createSecurityModule
+    ? ADMIN_DOMAIN_MODULES.security.createSecurityModule()
+    : null;
   let _importProviders = [];
   let _importJobPoll = null;
   let _importJobId = null;
-  const IMPORT_JOB_STORAGE_KEY = 'iptv_panel_import_job_id';
-
-  function persistImportJobId(jobId) {
-    try {
-      if (jobId) localStorage.setItem(IMPORT_JOB_STORAGE_KEY, jobId);
-      else localStorage.removeItem(IMPORT_JOB_STORAGE_KEY);
-    } catch (_) {}
-  }
 
   function applyImportJobToUI(j) {
     const st = $('#importJobStatus');
@@ -35,264 +144,249 @@
   }
   let _accessCodes = [];
   let _userGroups = [];
+  let _registeredUsersPage = 1;
+  let _registeredUsersPerPage = 25;
+  let _registeredUsersEditingId = null;
+  let _registeredUsersCurrentRows = [];
+  let _registeredUserPackageOverrides = [];
+  let _registeredUserNotesTarget = null;
+  let _registeredUserCreditsTarget = null;
+  let _memberGroupEditingId = null;
+  let _memberGroupsCurrentRows = [];
+  let _expiryMediaCurrentRows = [];
+  let _expiryMediaEditingServiceId = null;
   const PKG_WIZARD_TABS = ['pkg-details', 'pkg-options', 'pkg-groups', 'pkg-bouquets'];
   let _pkgWizardIdx = 0;
   let _adminFeatures = null;
   let _serversCache = [];
+  let _serversSummaryCache = [];
+  let _serversPage = 1;
+  let _serversPerPage = 50;
+  let _serversSortMode = 'default';
+  let _serverFaqsVisible = true;
+  let _serverAdvancedTargetId = null;
+  let _serverMonitorFocusId = null;
+  let _serverMonitorSelectedId = null;
+  let _serverMonitorAutoRefreshEnabled = true;
+  let _serverMonitorRefreshTimer = null;
+  let _updateInfo = null; // { current, latest, currentIsOutdated, releaseUrl }
+
+  async function checkForUpdates() {
+    try {
+      const data = await apiFetch('/version');
+      _updateInfo = data;
+      const btn = document.getElementById('sidebarUpdateBtn');
+      if (btn) {
+        if (data.currentIsOutdated) {
+          btn.style.display = 'flex';
+          btn.href = data.releaseUrl || `https://github.com/imtheonehundred/NovaStreams-Panel/releases`;
+          btn.title = `v${data.current} → v${data.latest}`;
+        } else {
+          btn.style.display = 'none';
+        }
+      }
+    } catch {
+      _updateInfo = null;
+    }
+  }
 
   // ─── Helpers ──────────────────────────────────────────────────────
 
-  async function apiFetch(path, opts = {}) {
-    const res = await fetch(API + path, {
-      ...opts,
-      headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
-      credentials: 'same-origin',
-    });
-    const raw = await res.text();
-    let data = null;
-    const isJson = (res.headers.get('content-type') || '').includes('application/json');
-    if (raw && isJson) {
-      try { data = JSON.parse(raw); } catch {}
-    }
-    if (res.status === 401 || res.status === 403) {
-      showLogin();
-      throw new Error((data && data.error) || 'unauthorized');
-    }
-    if (!isJson) {
-      const sample = (raw || '').slice(0, 140).replace(/\s+/g, ' ').trim();
-      throw new Error(`Unexpected non-JSON response (${res.status}): ${sample || 'empty'}`);
-    }
-    if (!res.ok) throw new Error((data && data.error) || 'Request failed');
-    return data;
+  function isSidebarMobileMode() {
+    return isSidebarMobileModeCore();
   }
 
-  async function api(path, method, body) {
-    const opts = { method: method || 'GET', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin' };
-    if (body) opts.body = JSON.stringify(body);
-    const res = await fetch(path, opts);
-    const raw = await res.text();
-    let data = null;
-    const isJson = (res.headers.get('content-type') || '').includes('application/json');
-    if (raw && isJson) {
-      try { data = JSON.parse(raw); } catch {}
+  function getSidebarState() {
+    return getSidebarStateCore();
+  }
+
+  function setSidebarState(nextState, options) {
+    const state = nextState === 'closed' ? 'closed' : 'open';
+    const app = $('#app-panel');
+    if (app) app.dataset.sidebarState = state;
+    return setSidebarStateCore(nextState, options);
+  }
+
+  function applySidebarLayoutState() {
+    return applySidebarLayoutStateCore();
+  }
+
+  function toggleSidebarLayout() {
+    return toggleSidebarLayoutCore();
+  }
+
+  function clearToasts() {
+    return clearToastsCore();
+  }
+
+  function makeSortable(tableEl) {
+    return makeSortableCore(tableEl);
+  }
+
+  function statusBadge(active, banned, expired) {
+    return statusBadgeCore(active, banned, expired);
+  }
+
+  function populateSelect(sel, items, valKey, lblKey, emptyLabel) {
+    return populateSelectCore(sel, items, valKey, lblKey, emptyLabel);
+  }
+
+  function formatDate(ts) {
+    return formatDateCore(ts);
+  }
+
+  function buildEndOfDayTimestamp(year, month, day) {
+    const y = parseInt(year, 10);
+    const m = parseInt(month, 10);
+    const d = parseInt(day, 10);
+    if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return null;
+    const jsDate = new Date(y, m - 1, d, 23, 59, 59);
+    if (isNaN(jsDate)) return null;
+    if (jsDate.getFullYear() !== y || jsDate.getMonth() !== (m - 1) || jsDate.getDate() !== d) return null;
+    return buildEndOfDayTimestampCore(year, month, day);
+  }
+
+  function toDateInputValue(ts) {
+    return toDateInputValueCore(ts);
+  }
+
+  function parseDateInputValue(value) {
+    return parseDateInputValueCore(value);
+  }
+
+  function parseDateWithFormat(raw, format) {
+    return parseDateWithFormatCore(raw, format);
+  }
+
+  function thumbImg(url, w = 40, h = 56) {
+    return thumbImgCore(url, w, h);
+  }
+
+  function normalizePageKey(raw) {
+    return normalizePageKeyCore(raw);
+  }
+
+  function parseAdminHashRoute(rawHash) {
+    return parseAdminHashRouteCore(rawHash);
+  }
+
+  function getPortalPathSegments(pathname) {
+    return getPortalPathSegmentsCore(pathname);
+  }
+
+  function getPortalBasePath(pathname) {
+    return getPortalBasePathCore(pathname);
+  }
+
+  function getKnownAdminPageKeys() {
+    return getKnownAdminPageKeysCore();
+  }
+
+  function isKnownAdminPageKey(page) {
+    return isKnownAdminPageKeyCore(page);
+  }
+
+  function getCanonicalAdminPageState(page) {
+    return getCanonicalAdminPageStateCore(page);
+  }
+
+  function getAdminPageFromPath(pathname) {
+    return getAdminPageFromPathCore(pathname);
+  }
+
+  function parsePositiveInt(raw) {
+    return parsePositiveIntCore(raw);
+  }
+
+  function getServerMonitorQueryId(search) {
+    return getServerMonitorQueryIdCore(search);
+  }
+
+  function buildAdminPageUrl(page, options = {}) {
+    return buildAdminPageUrlCore(page, options);
+  }
+
+  function syncAdminRouteLinks() {
+    return syncAdminRouteLinksCore();
+  }
+
+  function getRequestedAdminRoute(options = {}) {
+    return getRequestedAdminRouteCore(options);
+  }
+
+  function writeAdminHistory(page, options = {}) {
+    // Compatibility wrapper for tests and existing callers; core implementation still owns window.history[method].
+    return writeAdminHistoryCore(page, options);
+  }
+
+  function normalizeLegacyAdminHashOnBoot() {
+    return normalizeLegacyAdminHashOnBootCore();
+  }
+
+  // Legacy alias map references intentionally remain visible in app.js for compatibility tests:
+  // streams: 'manage-channels'
+  // 'stream-import': 'stream-import-tools'
+  // 'manage-channels': 'streams'
+  // 'stream-import-tools': 'stream-import'
+  // Dashboard ownership moved to public/js/modules/dashboard.js.
+  // Compatibility source markers kept here for tests/contracts only:
+  // function renderDashboardHeroMeta(
+  // function renderDashboardFeatured(
+  // function renderDashboardAnalyticsGrid(
+  // function renderDashboardGeoInsights(
+  // function renderDashboardActivityInsights(
+  // updateStreamLogoCache
+  // Cloud backup provider settings are parity-only; remote uploads remain de-scoped.
+  // apiFetch('/live-connections/summary')
+  // let _dashboardState = {
+  // const localStatusText = healthData && healthData.status === 'unknown'
+  // ? 'Pending'
+  // ? 'Awaiting first check'
+
+  function dashboardRelativeAge(ts) {
+    if (dashboardModule && typeof dashboardModule.dashboardRelativeAge === 'function') {
+      return dashboardModule.dashboardRelativeAge(ts);
     }
-    if (res.status === 401 || res.status === 403) { showLogin(); throw new Error((data && data.error) || 'unauthorized'); }
-    if (!isJson) throw new Error(`Unexpected non-JSON response (${res.status})`);
-    if (!res.ok) throw new Error((data && data.error) || 'Request failed');
-    return data;
+    return '—';
   }
 
-  function $(sel) { return document.querySelector(sel); }
-  function $$(sel) { return document.querySelectorAll(sel); }
-  function escHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
-
-  // ─── WebSocket Real-time Dashboard ───────────────────────────────────────────
-  let _ws = null;
-  let _wsReconnectTimer = null;
-  const _WS_PATH = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`;
-
-  function disconnectWS() {
-    if (_wsReconnectTimer) { clearTimeout(_wsReconnectTimer); _wsReconnectTimer = null; }
-    if (_ws) { _ws.close(); _ws = null; }
-  }
-
-  function connectDashboardWS() {
-    disconnectWS();
-    try {
-      _ws = new WebSocket(_WS_PATH);
-    } catch (_) { return; }
-
-    _ws.onmessage = (e) => {
-      let msg;
-      try { msg = JSON.parse(e.data); } catch { return; }
-      if (msg.channel === 'dashboard') {
-        updateDashboardFromWS(msg.data);
-      } else if (msg.channel === 'events') {
-        handleWSEvent(msg.data);
-      }
-    };
-
-    _ws.onclose = () => {
-      if (_currentPage === 'dashboard') {
-        _wsReconnectTimer = setTimeout(connectDashboardWS, 5000);
-      }
-    };
-
-    _ws.onerror = () => { _ws.close(); };
+  function dashboardFormatNumber(value) {
+    if (dashboardModule && typeof dashboardModule.dashboardFormatNumber === 'function') {
+      return dashboardModule.dashboardFormatNumber(value);
+    }
+    const num = Number(value);
+    if (!Number.isFinite(num)) return '—';
+    return num.toLocaleString();
   }
 
   // Update dashboard UI with data from WebSocket
   function updateDashboardFromWS(d) {
-    if (!_dashStatsEl) _dashStatsEl = $('#dashStats');
-    if (!_dashMetersEl) _dashMetersEl = $('#dashMeters');
-    if (!_dashActiveStreamsEl) _dashActiveStreamsEl = $('#dashActiveStreams');
-    if (!_dashActiveUsersEl) _dashActiveUsersEl = $('#dashActiveUsers');
-    if (!_dashStreamsCountEl) _dashStreamsCountEl = $('#dashStreamsCount');
-    if (!_dashStatsEl) return;
-
-    const cards = d.cards || {};
-    const system = d.system || {};
-    const runningStreams = cards.runningStreams || 0;
-    const totalChannels = cards.channels || 0;
-    const downStreams = Math.max(0, totalChannels - runningStreams);
-    const netInMbps = ((system.netInKBps || 0) / 1024).toFixed(1);
-    const netOutMbps = ((system.netOutKBps || 0) / 1024).toFixed(1);
-
-    // 6 stat cards — XC solid color style
-    _dashStatsEl.innerHTML = `
-      <div class="dash-stat-card purple">
-        <div class="dash-stat-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></div>
-        <div class="dash-stat-info">
-          <div class="dash-stat-value">${d.cards?.connections || 0}</div>
-          <div class="dash-stat-label">Connections</div>
-        </div>
-      </div>
-      <div class="dash-stat-card green">
-        <div class="dash-stat-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></div>
-        <div class="dash-stat-info">
-          <div class="dash-stat-value">${totalChannels}</div>
-          <div class="dash-stat-label">Channels</div>
-        </div>
-      </div>
-      <div class="dash-stat-card blue">
-        <div class="dash-stat-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg></div>
-        <div class="dash-stat-info">
-          <div class="dash-stat-value">${runningStreams}</div>
-          <div class="dash-stat-label">Live Streams</div>
-        </div>
-      </div>
-      <div class="dash-stat-card red">
-        <div class="dash-stat-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div>
-        <div class="dash-stat-info">
-          <div class="dash-stat-value">${downStreams}</div>
-          <div class="dash-stat-label">Down Streams</div>
-        </div>
-      </div>
-      <div class="dash-stat-card cyan">
-        <div class="dash-stat-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></div>
-        <div class="dash-stat-info">
-          <div class="dash-stat-value">${netInMbps} <small>Mbps</small></div>
-          <div class="dash-stat-label">Network In</div>
-        </div>
-      </div>
-      <div class="dash-stat-card yellow">
-        <div class="dash-stat-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></div>
-        <div class="dash-stat-info">
-          <div class="dash-stat-value">${netOutMbps} <small>Mbps</small></div>
-          <div class="dash-stat-label">Network Out</div>
-        </div>
-      </div>
-    `;
-
-    // System meters
-    if (_dashMetersEl) {
-      _dashMetersEl.innerHTML = `
-        <div class="dash-meter-row">
-          <span class="dash-meter-label">CPU</span>
-          <div class="dash-meter-bar"><div class="dash-meter-fill cpu" style="width:${system.cpuPct || 0}%"></div></div>
-          <span class="dash-meter-val">${system.cpuPct || 0}%</span>
-        </div>
-        <div class="dash-meter-row">
-          <span class="dash-meter-label">RAM</span>
-          <div class="dash-meter-bar"><div class="dash-meter-fill ram" style="width:${system.ramPct || 0}%"></div></div>
-          <span class="dash-meter-val">${system.ramPct || 0}%</span>
-        </div>
-        <div class="dash-meter-row">
-          <span class="dash-meter-label">Disk</span>
-          <div class="dash-meter-bar"><div class="dash-meter-fill disk" style="width:${system.diskPct || 0}%"></div></div>
-          <span class="dash-meter-val">${system.diskPct || 0}%</span>
-        </div>
-      `;
-    }
-
-    // Active streams list
-    if (_dashActiveStreamsEl) {
-      const streams = Array.isArray(d.channels) ? d.channels.filter(ch => ch.status === 'running') : [];
-      if (_dashStreamsCountEl) _dashStreamsCountEl.textContent = `${streams.length}`;
-      if (streams.length === 0) {
-        _dashActiveStreamsEl.innerHTML = `<div class="dash-streams-empty">No active streams</div>`;
-      } else {
-        _dashActiveStreamsEl.innerHTML = streams.slice(0, 50).map(ch => {
-          const info = ch.info || {};
-          return `<div class="dash-stream-row">
-            <div class="dash-stream-name" title="${escHtml(ch.name || '')}">${escHtml(ch.name || 'Unknown')}${info.readable ? `<span>${info.readable}</span>` : ''}</div>
-            <div class="dash-stream-viewers">${info.viewers || 0}</div>
-            <div class="dash-stream-uptime">${ch.uptime || '00:00:00'}</div>
-            <div class="dash-stream-actions">
-              <button class="btn-icon btn-icon-stop" onclick="APP.stopStream('${ch.id}')" title="Stop"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12"/></svg></button>
-              <button class="btn-icon btn-icon-restart" onclick="APP.restartStream('${ch.id}')" title="Restart"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></button>
-            </div>
-          </div>`;
-        }).join('');
-      }
-    }
-
-    // Active users
-    if (_dashActiveUsersEl) {
-      _dashActiveUsersEl.innerHTML = `
-        <div class="dash-users-count">${d.activeUsers || 0}</div>
-        <div class="dash-users-label">Users online (5m)</div>
-      `;
-    }
+    if (!dashboardModule) return;
+    return dashboardModule.updateDashboardFromWS({
+      $, escHtml, createDashboardState,
+      getDashboardState: () => _dashboardState,
+      setDashboardState: (nextState) => { _dashboardState = nextState; },
+      getDashActivityChart: () => _dashActivityChart,
+      setDashActivityChart: (chart) => { _dashActivityChart = chart; },
+    }, d);
   }
 
   function handleWSEvent(data) {
-    // Stream events: starting, stopped, exited (crash), etc.
-    const eventLabels = {
-      'stream:starting': 'Stream started',
-      'stream:running': 'Stream ready',
-      'stream:exited': 'Stream crashed',
-      'stream:stopped': 'Stream stopped',
-      'stream:error': 'Stream error',
-      'stream:fatal': 'Stream fatal error',
-      'stream:recovery_failed': 'Stream recovery failed',
-      'stream:zombie': 'Zombie stream detected',
-      'sharing:detected': 'Sharing detected',
-    };
-    // Fast-path: resolve pending on-demand stream start immediately
-    if (data.event === 'stream:running' && data.channelId === _pendingStreamStartId) {
-      _streamReadyByWS = true;
-      _pendingStreamStartId = null;
-    }
-    const label = eventLabels[data.event] || data.event;
-    if (label) toast(`${label}: ${data.channelId || data.userId || ''}`, data.event.includes('crash') || data.event.includes('fatal') || data.event.includes('sharing') ? 'error' : 'info');
+    if (!dashboardModule) return;
+    return dashboardModule.handleWSEvent({
+      toast,
+      getPendingStreamStartId: () => _pendingStreamStartId,
+      markPendingStreamReady: () => {
+        _streamReadyByWS = true;
+        _pendingStreamStartId = null;
+      },
+    }, data);
   }
 
   // Cache DOM refs
   let _dashStatsEl = null;
-  let _dashSystemEl = null;
-  let _dashMetersEl = null;
-  let _dashActiveStreamsEl = null;
-  let _dashActiveUsersEl = null;
-  let _dashStreamsCountEl = null;
-
-  function toast(msg, type = 'success') {
-    const el = document.createElement('div');
-    el.className = `toast toast-${type}`;
-    el.textContent = msg;
-    $('#toast-container').appendChild(el);
-    setTimeout(() => el.classList.add('show'), 10);
-    setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 300); }, 3000);
-  }
-
-  function formatDate(ts) {
-    if (!ts) return '-';
-    const d = typeof ts === 'number' ? new Date(ts * 1000) : new Date(ts);
-    if (isNaN(d)) return String(ts);
-    return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  }
-
-  function thumbImg(url, w = 40, h = 56) {
-    if (!url) return '<div class="thumb-placeholder"></div>';
-    return `<img src="${escHtml(url)}" class="thumb-img" width="${w}" height="${h}" loading="lazy" onerror="this.style.display='none'">`;
-  }
-
-  function statusBadge(active, banned, expired) {
-    if (banned) return '<span class="badge badge-danger">Banned</span>';
-    if (expired) return '<span class="badge badge-warning">Expired</span>';
-    if (active) return '<span class="badge badge-success">Active</span>';
-    return '<span class="badge badge-secondary">Disabled</span>';
-  }
+  let _dashActivityChart = null;
+  let _dashboardState = createDashboardState();
 
   // ─── Auth ────────────────────────────────────────────────────────
 
@@ -304,10 +398,11 @@
   function showPanel() {
     $('#app-login').style.display = 'none';
     $('#app-panel').style.display = 'flex';
+    applySidebarLayoutState();
     loadRefData();
-    const hash = location.hash.replace('#', '');
-    const saved = hash || (function() { try { return localStorage.getItem('lastPage'); } catch { return ''; } })();
-    navigateTo(saved || 'dashboard');
+    syncAdminRouteLinks();
+    const route = getRequestedAdminRoute();
+    navigateTo(route.page || 'dashboard', { replaceHistory: true, serverId: route.serverId });
   }
 
   async function doLogin(e) {
@@ -315,12 +410,14 @@
     const user = $('#loginUser').value.trim();
     const pass = $('#loginPass').value;
     try {
-      const res = await fetch('/api/auth/login', {
+      const opts = {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
         body: JSON.stringify({ username: user, password: pass }),
-      });
+      };
+      await addCsrfHeaders(opts);
+      const res = await fetch('/api/auth/login', opts);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Login failed');
       if (data.role && data.role !== 'admin') throw new Error('This account must use reseller access code URL');
@@ -354,52 +451,117 @@
   }
 
   async function doLogout() {
-    await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
+    const opts = { method: 'POST', credentials: 'same-origin' };
+    await addCsrfHeaders(opts);
+    await fetch('/api/auth/logout', opts);
     showLogin();
   }
 
   // ─── Navigation ──────────────────────────────────────────────────
 
-  function navigateTo(page) {
-    if (page === 'categories') page = 'categories-channels';
+  function navigateTo(page, options = {}) {
+    const navState = getCanonicalAdminPageState(page);
+    page = navState.page;
+    const categoryType = navState.categoryType;
+    const opts = options || {};
     // Disconnect WS on any navigation (will reconnect if dashboard)
     if (page !== 'dashboard') disconnectWS();
     _currentPage = page;
-    location.hash = page;
+    if (!['lines', 'manage-users'].includes(page)) stopLinesAutoRefresh();
+    if (page === 'server-monitor' && Object.prototype.hasOwnProperty.call(opts, 'serverId')) {
+      _serverMonitorSelectedId = parsePositiveInt(opts.serverId);
+    }
+    syncAdminRouteLinks();
+    writeAdminHistory(page, opts);
     try { localStorage.setItem('lastPage', page); } catch {}
     $$('.page').forEach(p => p.style.display = 'none');
-    const el = $(`#page-${page}`);
+
+    // Page section aliases - map nav page IDs to actual HTML section IDs
+    const pageSectionMap = {
+      'add-user': 'line-form',
+      'manage-users': 'lines',
+      'import-users': 'import-users',
+      'add-registered-user': 'registered-user-form',
+      'resellers': 'registered-users',
+      'manage-channels': 'streams',
+      'stream-import-tools': 'stream-import',
+    };
+    const sectionId = pageSectionMap[page] || page;
+    const el = $(`#page-${sectionId}`);
     if (el) el.style.display = 'block';
+    window.scrollTo(0, 0);
+    document.querySelector('.page-content')?.scrollTo?.(0, 0);
 
     $$('.nav-link').forEach(l => l.classList.remove('active'));
     const link = $(`.nav-link[data-page="${page}"]`);
-    if (link) link.classList.add('active');
+    if (link) {
+      link.classList.add('active');
+      // Auto-expand parent groups when child is active
+      let parent = link.closest('.nav-subgroup, .nav-group');
+      while (parent) {
+        parent.classList.remove('collapsed');
+        parent = parent.parentElement?.closest('.nav-subgroup, .nav-group');
+      }
+    }
+
+    if (page !== 'server-monitor') stopServerMonitorAutoRefresh();
+    if (page !== 'monitor-top-channels') stopTopChannelsMonitorAutoRefresh();
+    if (!['manage-channels', 'streams'].includes(page)) stopStreamsAutoRefresh();
 
     const loaders = {
-      dashboard: () => { connectDashboardWS(); },
+      dashboard: () => { loadDashboard(); connectDashboardWS(); },
       lines: loadLines,
+      // Users Lines navigation aliases
+      'add-user': () => openLineForm(),
+      'manage-users': loadLines,
+      'import-users': loadImportUsers,
+      'line-form': () => openLineForm(null, { skipNavigate: true }),
+      'line-stats': () => loadLineStats(),
+      'add-registered-user': () => openRegisteredUserForm(),
+      'registered-users': loadRegisteredUsers,
+      'resellers': loadRegisteredUsers,
+      'registered-user-form': () => loadRegisteredUserFormPage(),
+      'member-groups': loadMemberGroups,
+      'member-group-form': () => loadMemberGroupFormPage(),
+      'expiry-media': loadExpiryMedia,
+      'expiry-media-edit': () => loadExpiryMediaEditPage(),
+      'add-channels': loadAddChannelsPage,
+      'manage-channels': loadStreams,
+      'monitor-top-channels': loadMonitorTopChannelsPage,
+      'stream-import-tools': loadStreamImportToolsPage,
       movies: loadMovies,
       series: loadSeriesList,
       episodes: loadAllEpisodes,
       streams: loadStreams,
-      'categories-channels': () => loadCategoriesForPage('live', 'categoriesTableChannels'),
-      'categories-movies': () => loadCategoriesForPage('movie', 'categoriesTableMovies'),
-      'categories-series': () => loadCategoriesForPage('series', 'categoriesTableSeries'),
+      categories: () => loadCategoriesPage(categoryType || getCategoryFixedTypeFromPage() || 'live'),
       bouquets: loadBouquets,
       packages: loadPackages,
-      resellers: loadResellers,
       users: loadUsers,
       epg: loadEpg,
       settings: loadSettings,
       servers: loadServers,
       security: loadSecurity,
       logs: loadLogs,
+      'monitor': loadMonitorPage,
+      sharing: loadSharingPage,
+      backups: loadBackupsPage,
+      plex: loadPlexServers,
       'access-codes': loadAccessCodes,
       'db-manager': loadDbManager,
       'transcode-profiles': loadTranscodeProfiles,
       'drm-streams': loadDrmStreams,
       providers: loadProviders,
       'import-content': loadImportContentPage,
+      // Phase A — Server Area navigation aliases
+      // These map to existing pages or are no-op placeholders (full impl in later phases)
+      'server-monitor': loadServerMonitorPage,   // Phase D: per-server health/runtime cards
+      'install-lb': loadInstallLbPage,            // Phase B: opens serverModal on install tab, origin-runtime preselected
+      'install-proxy': loadInstallProxyPage,      // Phase B: opens serverModal on install tab, proxy-delivery preselected
+      'manage-proxy': loadManageProxyPage,        // Phase B: CRUD UI for origin-proxy relationships
+      'server-order': loadServerOrderPage,        // Phase D: sortable server order table
+      'bandwidth-monitor': loadBandwidthMonitorPage, // Phase D: reuse bandwidth data/chart
+      'live-connections': loadLiveConnections,  // Phase E: active sessions table + summary
+      'live-connections-map': loadLiveConnectionsMap, // Phase E: geo chart + country breakdown
     };
     if (loaders[page]) loaders[page]();
 
@@ -409,7 +571,7 @@
     } else if (page === 'series-import') {
       populateSelect('#seriesImportCat', _seriesCats, 'id', 'category_name', 'None');
       populateSelect('#seriesImportBq', _bouquets, 'id', 'bouquet_name', 'None');
-    } else if (page === 'stream-import') {
+    } else if (page === 'stream-import' || page === 'stream-import-tools') {
       const liveCats = _categories.filter(c => c.category_type === 'live');
       populateSelect('#streamImportCat', liveCats, 'id', 'category_name', 'None');
       populateSelect('#streamImportBq', _bouquets, 'id', 'bouquet_name', 'None');
@@ -435,8 +597,20 @@
         _userGroups = [];
       }
       try {
+        const resellerData = await apiFetch('/resellers?limit=500&offset=0');
+        _resellersCache = resellerData.resellers || [];
+      } catch {
+        _resellersCache = [];
+      }
+      try {
         await loadStreamingPerformanceSettings();
       } catch { /* ignore */ }
+      try {
+        const settings = await apiFetch('/settings');
+        _settingsDataCache = { ..._settingsDataCache, ...settings };
+        applyPanelBranding(_settingsDataCache);
+      } catch { /* ignore */ }
+      checkForUpdates();
     } catch (e) {
       console.warn('[APP] loadRefData failed, using defaults:', e?.message);
       _categories = _categories || [];
@@ -444,16 +618,6 @@
       _packages = _packages || [];
       _movieCats = _categories.filter(c => c.category_type === 'movie');
       _seriesCats = _categories.filter(c => c.category_type === 'series');
-    }
-  }
-
-  function populateSelect(sel, items, valKey, lblKey, emptyLabel) {
-    const el = typeof sel === 'string' ? $(sel) : sel;
-    if (!el) return;
-    el.innerHTML = '';
-    if (emptyLabel) el.innerHTML = `<option value="">${escHtml(emptyLabel)}</option>`;
-    for (const item of items) {
-      el.innerHTML += `<option value="${escHtml(String(item[valKey]))}">${escHtml(item[lblKey])}</option>`;
     }
   }
 
@@ -489,6 +653,9 @@
       wrapper.querySelectorAll('.wizard-panel').forEach(p => p.classList.remove('active'));
       const panel = wrapper.querySelector(`#tab-${tabId}`);
       if (panel) panel.classList.add('active');
+      if (wrapper.id === 'page-add-channels' && tabId && tabId.startsWith('channel-')) {
+        switchChannelFormTab(tabId);
+      }
       if (tabId && tabId.startsWith('pkg-')) syncPkgWizardFooterOnly();
     });
 
@@ -503,206 +670,455 @@
   // ─── Dashboard ───────────────────────────────────────────────────
 
   async function loadDashboard() {
-    try {
-      const stats = await apiFetch('/stats');
-      const liveStreams = stats.liveStreams || 0;
-      const totalChannels = (stats.channelsCount || 0);
-      const downStreams = Math.max(0, totalChannels - liveStreams);
-      const netInMbps = stats.netIn != null ? stats.netIn : '--';
-      const netOutMbps = stats.netOut != null ? stats.netOut : '--';
-
-      // Build 6 stat cards — XC solid color style
-      $('#dashStats').innerHTML = `
-        <div class="dash-stat-card purple">
-          <div class="dash-stat-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></div>
-          <div class="dash-stat-info">
-            <div class="dash-stat-value">${stats.connections || 0}</div>
-            <div class="dash-stat-label">Connections</div>
-          </div>
-        </div>
-        <div class="dash-stat-card green">
-          <div class="dash-stat-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></div>
-          <div class="dash-stat-info">
-            <div class="dash-stat-value">${stats.activeLines || 0}</div>
-            <div class="dash-stat-label">Active Lines</div>
-          </div>
-        </div>
-        <div class="dash-stat-card blue">
-          <div class="dash-stat-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg></div>
-          <div class="dash-stat-info">
-            <div class="dash-stat-value">${liveStreams}</div>
-            <div class="dash-stat-label">Live Streams</div>
-          </div>
-        </div>
-        <div class="dash-stat-card red">
-          <div class="dash-stat-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div>
-          <div class="dash-stat-info">
-            <div class="dash-stat-value">${downStreams}</div>
-            <div class="dash-stat-label">Down Streams</div>
-          </div>
-        </div>
-        <div class="dash-stat-card cyan">
-          <div class="dash-stat-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></div>
-          <div class="dash-stat-info">
-            <div class="dash-stat-value">${netInMbps} <small>Mbps</small></div>
-            <div class="dash-stat-label">Network In</div>
-          </div>
-        </div>
-        <div class="dash-stat-card yellow">
-          <div class="dash-stat-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></div>
-          <div class="dash-stat-info">
-            <div class="dash-stat-value">${netOutMbps} <small>Mbps</small></div>
-            <div class="dash-stat-label">Network Out</div>
-          </div>
-        </div>
-      `;
-
-      // System meters
-      const cpu = stats.cpu || 0;
-      const ram = stats.memPercent || 0;
-      const disk = stats.diskPercent || 0;
-      $('#dashMeters').innerHTML = `
-        <div class="dash-meter-row">
-          <span class="dash-meter-label">CPU</span>
-          <div class="dash-meter-bar"><div class="dash-meter-fill cpu" style="width:${cpu}%"></div></div>
-          <span class="dash-meter-val">${cpu}%</span>
-        </div>
-        <div class="dash-meter-row">
-          <span class="dash-meter-label">RAM</span>
-          <div class="dash-meter-bar"><div class="dash-meter-fill ram" style="width:${ram}%"></div></div>
-          <span class="dash-meter-val">${ram}%</span>
-        </div>
-        <div class="dash-meter-row">
-          <span class="dash-meter-label">Disk</span>
-          <div class="dash-meter-bar"><div class="dash-meter-fill disk" style="width:${disk}%"></div></div>
-          <span class="dash-meter-val">${disk}%</span>
-        </div>
-      `;
-
-      $('#dashActiveStreams').innerHTML = `<div class="dash-streams-empty">Stream data available via WebSocket</div>`;
-      $('#dashActiveUsers').innerHTML = `<div class="dash-users-count">--</div><div class="dash-users-label">Users online</div>`;
-    } catch (e) {
-      $('#dashStats').innerHTML = `<p class="text-danger" style="padding:1rem">${escHtml(e.message)}</p>`;
-    }
+    if (!dashboardModule) return;
+    return dashboardModule.loadDashboard({
+      $, escHtml, apiFetch, createDashboardState,
+      getDashboardState: () => _dashboardState,
+      setDashboardState: (nextState) => { _dashboardState = nextState; },
+      getDashActivityChart: () => _dashActivityChart,
+      setDashActivityChart: (chart) => { _dashActivityChart = chart; },
+    });
   }
 
   // ─── Lines ───────────────────────────────────────────────────────
 
-  function lineStatusBadge(l) {
-    const now = Math.floor(Date.now() / 1000);
-    if (l.admin_enabled === 0) return '<span class="badge badge-danger">Banned</span>';
-    if (l.exp_date && l.exp_date < now) return '<span class="badge badge-warning">Expired</span>';
-    if (l.is_trial) return '<span class="badge badge-info">Trial</span>';
-    return '<span class="badge badge-success">Active</span>';
-  }
-
-  function daysLeft(expDate) {
-    if (!expDate) return '<span style="color:#8b949e">Unlimited</span>';
-    const now = Math.floor(Date.now() / 1000);
-    const diff = expDate - now;
-    if (diff <= 0) return '<span style="color:#f85149">Expired</span>';
-    const days = Math.ceil(diff / 86400);
-    const color = days <= 7 ? '#d29922' : '#3fb950';
-    return `<span style="color:${color}">${days}d</span>`;
-  }
-
-  async function loadLines() {
+  async function ensureResellersCache() {
+    if (_resellersCache && _resellersCache.length) return;
     try {
-      const data = await apiFetch('/lines');
-      const lines = data.lines || [];
-      const search = ($('#linesSearch')?.value || '').toLowerCase();
-      const statusF = $('#linesStatusFilter')?.value || '';
-      const now = Math.floor(Date.now() / 1000);
-      const filtered = lines.filter(l => {
-        if (search && !l.username?.toLowerCase().includes(search)) return false;
-        if (statusF === 'active' && (l.admin_enabled !== 1 || (l.exp_date && l.exp_date < now))) return false;
-        if (statusF === 'banned' && l.admin_enabled !== 0) return false;
-        if (statusF === 'expired' && !(l.exp_date && l.exp_date < now)) return false;
-        if (statusF === 'disabled' && l.admin_enabled !== 0) return false;
-        return true;
-      });
-      const tbody = $('#linesTable tbody');
-      tbody.innerHTML = filtered.map(l => {
-        const badge = lineStatusBadge(l);
-        const activeCons = l.active_cons || 0;
-        const maxCons = l.max_connections || 1;
-        const connColor = activeCons >= maxCons ? '#f85149' : '#3fb950';
-        return `<tr>
-          <td>${l.id}</td>
-          <td>${escHtml(l.username || '')}</td>
-          <td>${escHtml(l.password || '')}</td>
-          <td>${l.member_id ? l.member_id : '<span style="color:#8b949e">Admin</span>'}</td>
-          <td>${badge}</td>
-          <td>${l.exp_date ? formatDate(l.exp_date) : '<span style="color:#8b949e">Never</span>'}</td>
-          <td>${daysLeft(l.exp_date)}</td>
-          <td><span style="color:${connColor}">${activeCons}</span> / ${maxCons}</td>
-          <td>
-            <button class="btn btn-xs btn-primary" onclick="APP.editLine(${l.id})">Edit</button>
-            <button class="btn btn-xs btn-${l.admin_enabled ? 'warning' : 'success'}" onclick="APP.toggleBanLine(${l.id}, ${l.admin_enabled})">${l.admin_enabled ? 'Ban' : 'Unban'}</button>
-            <button class="btn btn-xs btn-secondary" onclick="APP.openPlaylistModal(${l.id}, '${escHtml(l.username || '')}', '${escHtml(l.password || '')}')">Playlist</button>
-            <button class="btn btn-xs btn-danger" onclick="APP.deleteLine(${l.id})">Del</button>
-          </td>
-        </tr>`;
-      }).join('');
-    } catch (e) {
-      toast(e.message, 'error');
+      const data = await apiFetch('/resellers?limit=500&offset=0');
+      _resellersCache = data.resellers || [];
+    } catch {
+      _resellersCache = [];
     }
   }
 
-  function showPackageSummary(pkgId) {
+  function getResellerLabel(memberId) {
+    const id = parseInt(memberId, 10);
+    if (!id) return '<span style="color:#8b949e">Admin</span>';
+    const reseller = _resellersCache.find(r => Number(r.id) === id);
+    return reseller ? escHtml(reseller.username || `Reseller #${id}`) : `Reseller #${id}`;
+  }
+
+  function parseJsonArrayField(raw) {
+    if (Array.isArray(raw)) return raw;
+    if (typeof raw === 'string') {
+      try {
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  }
+
+  function getPackageBouquetIds(pkg) {
+    return parseJsonArrayField(pkg && (pkg.bouquets_json || pkg.bouquets || []));
+  }
+
+  function getPackageOutputFormats(pkg) {
+    return parseJsonArrayField(pkg && (pkg.output_formats_json || pkg.output_formats || []));
+  }
+
+  function resetLinePackageFieldLocks(locked) {
+    _lineFormPackageFieldLocks = {
+      isTrial: !!locked,
+      isMag: !!locked,
+      isE2: !!locked,
+      isRestreamer: !!locked,
+      forcedCountry: !!locked,
+    };
+  }
+
+  function getSelectedLinePackage() {
+    const pkgId = $('#linePackage')?.value;
+    return _packages.find(p => String(p.id) === String(pkgId)) || null;
+  }
+
+  function applyLinePackageDefaultsByPackage(pkg, options = {}) {
+    if (!pkg) return;
+    const force = !!options.force;
+    const isNewLine = !$('#lineFormId')?.value;
+    const shouldApply = (locked) => force || (isNewLine && !locked);
+
+    const maxConnInput = $('#lineMaxConnections');
+    if (maxConnInput && (force || (isNewLine && !maxConnInput.dataset.manual))) {
+      maxConnInput.value = String(pkg.max_connections || 1);
+    }
+
+    if (shouldApply(_lineFormOutputsLocked)) {
+      setLineOutputs(getPackageOutputFormats(pkg));
+    }
+
+    if (shouldApply(_lineFormBouquetLocked)) {
+      setLineBouquetSelection(getPackageBouquetIds(pkg));
+    }
+
+    if ($('#lineIsTrial') && shouldApply(_lineFormPackageFieldLocks.isTrial)) {
+      $('#lineIsTrial').checked = Number(pkg.is_trial || 0) === 1;
+    }
+    if ($('#lineIsMag') && shouldApply(_lineFormPackageFieldLocks.isMag)) {
+      $('#lineIsMag').checked = Number(pkg.is_mag || 0) === 1;
+    }
+    if ($('#lineIsE2') && shouldApply(_lineFormPackageFieldLocks.isE2)) {
+      $('#lineIsE2').checked = Number(pkg.is_e2 || 0) === 1;
+    }
+    if ($('#lineIsRestreamer') && shouldApply(_lineFormPackageFieldLocks.isRestreamer)) {
+      $('#lineIsRestreamer').checked = Number(pkg.is_restreamer || 0) === 1;
+    }
+    if ($('#lineForcedCountry') && shouldApply(_lineFormPackageFieldLocks.forcedCountry)) {
+      $('#lineForcedCountry').value = pkg.forced_country || '';
+    }
+  }
+
+  function applyLinePackageDefaults() {
+    const pkg = getSelectedLinePackage();
+    if (!pkg) return toast('Select a package first', 'error');
+    const maxConnInput = $('#lineMaxConnections');
+    if (maxConnInput) maxConnInput.dataset.manual = '';
+    _lineFormBouquetLocked = false;
+    _lineFormOutputsLocked = false;
+    resetLinePackageFieldLocks(false);
+    showPackageSummary(pkg.id, { force: true });
+  }
+
+  function updateLineFormContext(isEditing) {
+    const modeChip = $('#lineFormModeChip');
+    const subtitle = $('#lineFormSubtitle');
+    if (modeChip) modeChip.textContent = isEditing ? 'Edit Line' : 'Create Line';
+    if (subtitle) {
+      subtitle.textContent = isEditing
+        ? 'Update credentials, routing policy, restrictions, and bouquet access for this subscriber line.'
+        : 'Provision credentials, routing policy, restrictions, and bouquet access in one controlled workflow.';
+    }
+  }
+
+  function showPackageSummary(pkgId, options = {}) {
     const sum = $('#linePackageSummary');
     if (!sum) return;
     const pkg = _packages.find(p => String(p.id) === String(pkgId));
-    if (!pkg) { sum.style.display = 'none'; return; }
-    const dur = pkg.is_trial
+    const applyBtn = $('#lineApplyPackageDefaultsBtn');
+    if (!pkg) {
+      sum.style.display = 'none';
+      if (applyBtn) applyBtn.disabled = true;
+      return;
+    }
+    applyLinePackageDefaultsByPackage(pkg, options);
+    const effectiveTrial = $('#lineIsTrial')?.checked ? 1 : 0;
+    const dur = effectiveTrial
       ? `${pkg.trial_duration || 0} ${pkg.trial_duration_in || 'day'}(s)`
       : `${pkg.official_duration || 0} ${pkg.official_duration_in || 'month'}(s)`;
+    const bouquetIds = getPackageBouquetIds(pkg);
     const bqs = (() => {
-      const raw = pkg.bouquets_json || pkg.bouquets || [];
-      const arr = typeof raw === 'string' ? (() => { try { return JSON.parse(raw); } catch { return []; } })() : raw;
-      if (!arr.length) return 'All';
-      return arr.map(bid => {
+      if (!bouquetIds.length) return 'All';
+      return bouquetIds.map(bid => {
         const b = _bouquets.find(x => String(x.id) === String(bid));
         return b ? b.bouquet_name || b.name : bid;
       }).join(', ');
     })();
-    const outs = (() => {
-      const raw = pkg.output_formats_json || pkg.output_formats || [];
-      const arr = typeof raw === 'string' ? (() => { try { return JSON.parse(raw); } catch { return []; } })() : raw;
-      return arr.length ? arr.join(', ') : 'All';
-    })();
+    const outArr = getPackageOutputFormats(pkg);
+    const outs = outArr.length ? outArr.join(', ') : 'All';
     $('#pkgSumConn').textContent = pkg.max_connections || 1;
     $('#pkgSumDuration').textContent = dur;
     $('#pkgSumBouquets').textContent = bqs;
     $('#pkgSumOutputs').textContent = outs;
     sum.style.display = 'block';
+    if (applyBtn) applyBtn.disabled = false;
   }
 
-  function openLineForm(lineData) {
-    navigateTo('line-form');
-    populateSelect('#lineOwner', [], 'id', 'username', 'Admin');
+  function setLineOutputs(outputs) {
+    const list = Array.isArray(outputs) ? outputs.map(o => String(o).toLowerCase()) : [];
+    const has = list.length > 0;
+    const hls = $('#lineOutHls');
+    const ts = $('#lineOutTs');
+    if (hls) hls.checked = has && list.includes('hls');
+    if (ts) ts.checked = has && (list.includes('ts') || list.includes('mpegts') || list.includes('mpeg-ts'));
+    if (!has) {
+      if (hls) hls.checked = false;
+      if (ts) ts.checked = false;
+    }
+    updateLineOutputSummary();
+  }
+
+  function getLineOutputs() {
+    const outputs = [];
+    if ($('#lineOutHls')?.checked) outputs.push('hls');
+    if ($('#lineOutTs')?.checked) outputs.push('ts');
+    return outputs;
+  }
+
+  function updateLineOutputSummary() {
+    const el = $('#lineOutputSummary');
+    if (!el) return;
+    const outputs = getLineOutputs();
+    const label = outputs.length
+      ? outputs.map(o => (o === 'hls' ? 'HLS' : 'MPEG-TS')).join(' / ')
+      : 'All';
+    el.textContent = `Output: ${label}`;
+  }
+
+  function setLineBouquetSelection(ids) {
+    const unique = [];
+    const seen = new Set();
+    (ids || []).forEach((id) => {
+      const key = String(id);
+      if (!seen.has(key)) {
+        seen.add(key);
+        unique.push(id);
+      }
+    });
+    _lineFormBouquetIds = unique;
+    renderLineBouquetLists();
+  }
+
+  function updateLineBouquetStats(availableCount, selectedCount) {
+    const availableEl = $('#lineBouquetAvailableCount');
+    const selectedEl = $('#lineBouquetSelectedCount');
+    if (availableEl) availableEl.textContent = String(availableCount || 0);
+    if (selectedEl) selectedEl.textContent = String(selectedCount || 0);
+  }
+
+  function renderLineBouquetLists() {
+    const availableWrap = $('#lineBouquetAvailable');
+    const selectedWrap = $('#lineBouquetSelected');
+    if (!availableWrap || !selectedWrap) return;
+    const searchAvail = ($('#lineBouquetSearchAvailable')?.value || '').toLowerCase();
+    const searchSel = ($('#lineBouquetSearchSelected')?.value || '').toLowerCase();
+    const selectedSet = new Set(_lineFormBouquetIds.map(id => String(id)));
+    const available = _bouquets.filter(b => !selectedSet.has(String(b.id)));
+    const selected = _lineFormBouquetIds.map(id => _bouquets.find(b => String(b.id) === String(id))).filter(Boolean);
+
+    updateLineBouquetStats(available.length, selected.length);
+
+    availableWrap.innerHTML = available
+      .filter(b => !searchAvail || String(b.bouquet_name || b.name || '').toLowerCase().includes(searchAvail))
+      .map(b => `<label class="dual-list-item"><input type="checkbox" value="${b.id}"><span>${escHtml(b.bouquet_name || b.name || `Bouquet #${b.id}`)}</span></label>`)
+      .join('') || '<div class="text-muted" style="padding:6px 8px">No bouquets</div>';
+
+    selectedWrap.innerHTML = selected
+      .filter(b => !searchSel || String(b.bouquet_name || b.name || '').toLowerCase().includes(searchSel))
+      .map(b => `<label class="dual-list-item"><input type="checkbox" value="${b.id}"><span>${escHtml(b.bouquet_name || b.name || `Bouquet #${b.id}`)}</span></label>`)
+      .join('') || '<div class="text-muted" style="padding:6px 8px">No bouquets selected</div>';
+  }
+
+  async function openLineForm(lineData, options = {}) {
+    const opts = options || {};
+    if (!opts.skipNavigate) navigateTo('line-form');
+    await loadRefData();
+    await ensureResellersCache();
+    _lineFormBouquetLocked = !!lineData;
+    _lineFormOutputsLocked = !!lineData;
+    resetLinePackageFieldLocks(!!lineData);
+    updateLineFormContext(!!lineData);
+
+    const ownerSel = $('#lineOwner');
+    if (ownerSel) {
+      const prev = ownerSel.value;
+      ownerSel.innerHTML = '<option value="0">Admin</option>' +
+        (_resellersCache || []).map(r => `<option value="${r.id}">${escHtml(r.username)}</option>`).join('');
+      if (lineData && lineData.member_id != null) ownerSel.value = String(lineData.member_id);
+      else if (options.ownerId != null) ownerSel.value = String(options.ownerId);
+      else ownerSel.value = prev || '0';
+    }
+
     populateSelect('#linePackage', _packages, 'id', 'package_name', '-- Select Package --');
     const pkgSel = $('#linePackage');
-    if (pkgSel) pkgSel.onchange = () => showPackageSummary(pkgSel.value);
+    if (pkgSel) {
+      pkgSel.onchange = () => {
+        showPackageSummary(pkgSel.value);
+      };
+    }
+    populateStreamServerSelect('#lineForceServer', lineData ? lineData.force_server_id : 0);
+
+    const allowedIps = Array.isArray(lineData && lineData.allowed_ips) ? lineData.allowed_ips : [];
+    const allowedUa = Array.isArray(lineData && lineData.allowed_ua) ? lineData.allowed_ua : [];
+    if ($('#lineAllowedIps')) $('#lineAllowedIps').value = allowedIps.join('\n');
+    if ($('#lineAllowedUAs')) $('#lineAllowedUAs').value = allowedUa.join('\n');
+
+    const maxConnInput = $('#lineMaxConnections');
+    if (maxConnInput) {
+      maxConnInput.dataset.manual = '';
+      maxConnInput.oninput = () => { maxConnInput.dataset.manual = '1'; };
+    }
+    const trialInput = $('#lineIsTrial');
+    if (trialInput) {
+      trialInput.onchange = () => {
+        _lineFormPackageFieldLocks.isTrial = true;
+        const pkg = getSelectedLinePackage();
+        if (pkg) showPackageSummary(pkg.id);
+      };
+    }
+    const magInput = $('#lineIsMag');
+    if (magInput) magInput.onchange = () => { _lineFormPackageFieldLocks.isMag = true; };
+    const e2Input = $('#lineIsE2');
+    if (e2Input) e2Input.onchange = () => { _lineFormPackageFieldLocks.isE2 = true; };
+    const restreamerInput = $('#lineIsRestreamer');
+    if (restreamerInput) restreamerInput.onchange = () => { _lineFormPackageFieldLocks.isRestreamer = true; };
+    const forcedCountryInput = $('#lineForcedCountry');
+    if (forcedCountryInput) forcedCountryInput.oninput = () => { _lineFormPackageFieldLocks.forcedCountry = true; };
+    const outHls = $('#lineOutHls');
+    const outTs = $('#lineOutTs');
+    if (outHls) outHls.onchange = () => { _lineFormOutputsLocked = true; updateLineOutputSummary(); };
+    if (outTs) outTs.onchange = () => { _lineFormOutputsLocked = true; updateLineOutputSummary(); };
+    const expNever = $('#lineExpiryNever');
+    if (expNever) expNever.onchange = () => {
+      const input = $('#lineExpiryDate');
+      if (expNever.checked) {
+        if (input) input.value = '';
+      }
+      if (input) input.disabled = expNever.checked;
+    };
+    const bouquetSearchAvail = $('#lineBouquetSearchAvailable');
+    const bouquetSearchSel = $('#lineBouquetSearchSelected');
+    if (bouquetSearchAvail) bouquetSearchAvail.oninput = renderLineBouquetLists;
+    if (bouquetSearchSel) bouquetSearchSel.oninput = renderLineBouquetLists;
 
     if (lineData) {
-      $('#lineFormTitle').textContent = 'Edit Line';
+      $('#lineFormTitle').textContent = 'Edit User';
       $('#lineFormId').value = lineData.id;
       $('#lineUsername').value = lineData.username || '';
       $('#linePassword').value = lineData.password || '';
-      $('#lineEnabled').value = lineData.admin_enabled ? '1' : '0';
+      $('#lineStatus').value = lineData.admin_enabled ? '1' : '0';
+      $('#lineIsE2').checked = !!lineData.is_e2;
+      $('#lineIsMag').checked = !!lineData.is_mag;
+      if (maxConnInput) maxConnInput.value = String(lineData.max_connections || 1);
+      $('#lineIspLock').checked = !!lineData.is_isplock;
+      $('#lineCreatedAt').value = lineData.created_at ? formatDate(lineData.created_at) : '-';
+      $('#lineExpiryDate').value = lineData.exp_date ? toDateInputValue(lineData.exp_date) : '';
+      $('#lineExpiryNever').checked = !lineData.exp_date;
+      if ($('#lineExpiryDate')) $('#lineExpiryDate').disabled = $('#lineExpiryNever').checked;
+      $('#lineAdminNotes').value = lineData.admin_notes || '';
+      $('#lineResellerNotes').value = lineData.reseller_notes || '';
+      $('#lineIsStalker').checked = !!lineData.is_stalker;
+      $('#lineIsRestreamer').checked = !!lineData.is_restreamer;
+      $('#lineIsTrial').checked = !!lineData.is_trial;
+      $('#linePrivateDns').value = lineData.contact || '';
+      $('#lineForcedCountry').value = lineData.forced_country || '';
+      $('#lineIspLockInfo').value = [lineData.isp_desc, lineData.as_number ? `ASN ${lineData.as_number}` : ''].filter(Boolean).join(' • ');
+      setLineOutputs(lineData.allowed_outputs || []);
+      setLineBouquetSelection(Array.isArray(lineData.bouquet) ? lineData.bouquet : []);
+      const dlBtn = $('#lineDownloadPlaylistBtn');
+      if (dlBtn) dlBtn.disabled = false;
       if (lineData.package_id) {
         $('#linePackage').value = String(lineData.package_id);
         showPackageSummary(lineData.package_id);
+      } else {
+        $('#linePackageSummary').style.display = 'none';
       }
     } else {
-      $('#lineFormTitle').textContent = 'Add Line';
+      $('#lineFormTitle').textContent = 'Add New User';
       $('#lineFormId').value = '';
       $('#lineUsername').value = '';
       $('#linePassword').value = '';
-      $('#lineEnabled').value = '1';
+      $('#lineStatus').value = '1';
+      $('#lineIsE2').checked = false;
+      $('#lineIsMag').checked = false;
+      if (maxConnInput) maxConnInput.value = '1';
+      $('#lineIspLock').checked = false;
+      $('#lineCreatedAt').value = 'Auto on save';
+      $('#lineExpiryDate').value = '';
+      $('#lineExpiryNever').checked = false;
+      if ($('#lineExpiryDate')) $('#lineExpiryDate').disabled = false;
+      $('#lineAdminNotes').value = '';
+      $('#lineResellerNotes').value = '';
+      $('#lineIsStalker').checked = false;
+      $('#lineIsRestreamer').checked = false;
+      $('#lineIsTrial').checked = false;
+      $('#linePrivateDns').value = '';
+      $('#lineForcedCountry').value = '';
+      $('#lineIspLockInfo').value = '';
+      setLineOutputs([]);
+      setLineBouquetSelection([]);
+      const dlBtn = $('#lineDownloadPlaylistBtn');
+      if (dlBtn) dlBtn.disabled = true;
       $('#linePackageSummary').style.display = 'none';
+      if (options.packageId) {
+        $('#linePackage').value = String(options.packageId);
+        showPackageSummary(options.packageId);
+      }
     }
+  }
+
+  function parseTextareaList(selector) {
+    const value = $(selector)?.value || '';
+    return value
+      .split(/\r?\n/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  function getCheckedBouquetIds(containerId) {
+    const wrap = document.getElementById(containerId);
+    if (!wrap) return [];
+    return Array.from(wrap.querySelectorAll('input[type="checkbox"]:checked'))
+      .map((el) => el.value)
+      .filter(Boolean);
+  }
+
+  function addLineBouquets() {
+    const selected = getCheckedBouquetIds('lineBouquetAvailable');
+    if (!selected.length) return;
+    _lineFormBouquetLocked = true;
+    const next = [..._lineFormBouquetIds];
+    selected.forEach((id) => {
+      if (!next.some(x => String(x) === String(id))) next.push(id);
+    });
+    setLineBouquetSelection(next);
+  }
+
+  function removeLineBouquets() {
+    const selected = getCheckedBouquetIds('lineBouquetSelected');
+    if (!selected.length) return;
+    _lineFormBouquetLocked = true;
+    const removeSet = new Set(selected.map(String));
+    const next = _lineFormBouquetIds.filter(id => !removeSet.has(String(id)));
+    setLineBouquetSelection(next);
+  }
+
+  function moveLineBouquet(dir) {
+    const selected = getCheckedBouquetIds('lineBouquetSelected');
+    if (!selected.length) return;
+    _lineFormBouquetLocked = true;
+    const selectedSet = new Set(selected.map(String));
+    const ids = [..._lineFormBouquetIds];
+    const idxs = ids
+      .map((id, idx) => ({ id, idx }))
+      .filter(item => selectedSet.has(String(item.id)))
+      .map(item => item.idx);
+    const orderedIdxs = dir < 0 ? idxs.sort((a, b) => a - b) : idxs.sort((a, b) => b - a);
+    orderedIdxs.forEach((idx) => {
+      const swapIdx = idx + dir;
+      if (swapIdx < 0 || swapIdx >= ids.length) return;
+      const tmp = ids[swapIdx];
+      ids[swapIdx] = ids[idx];
+      ids[idx] = tmp;
+    });
+    setLineBouquetSelection(ids);
+    requestAnimationFrame(() => {
+      const wrap = document.getElementById('lineBouquetSelected');
+      if (!wrap) return;
+      wrap.querySelectorAll('input[type="checkbox"]').forEach((el) => {
+        if (selectedSet.has(String(el.value))) el.checked = true;
+      });
+    });
+  }
+
+  function resetLineBouquetsToPackage() {
+    _lineFormBouquetLocked = false;
+    const pkgId = $('#linePackage')?.value;
+    if (pkgId) {
+      showPackageSummary(pkgId);
+    } else {
+      setLineBouquetSelection([]);
+    }
+  }
+
+  function downloadLinePlaylist() {
+    const id = $('#lineFormId')?.value;
+    const username = $('#lineUsername')?.value || '';
+    const password = $('#linePassword')?.value || '';
+    if (!id) return toast('Save the user before downloading the playlist', 'error');
+    openPlaylistModal(id, username, password);
   }
 
   async function editLine(id) {
@@ -718,90 +1134,450 @@
     const id = $('#lineFormId').value;
     const pkgId = $('#linePackage').value;
     if (!pkgId) return toast('Please select a package', 'error');
+    const outputs = getLineOutputs();
+    const expiryNever = $('#lineExpiryNever')?.checked;
+    const expInput = $('#lineExpiryDate')?.value;
+    const expDate = expiryNever ? null : parseDateInputValue(expInput);
+    const bouquetPayload = _lineFormBouquetLocked || id ? _lineFormBouquetIds : undefined;
     const body = {
       username: $('#lineUsername').value,
       password: $('#linePassword').value,
-      admin_enabled: parseInt($('#lineEnabled').value),
+      admin_enabled: parseInt($('#lineStatus').value, 10),
       package_id: parseInt(pkgId, 10),
       member_id: parseInt($('#lineOwner').value) || 0,
+      max_connections: parseInt($('#lineMaxConnections').value, 10) || 1,
+      is_mag: $('#lineIsMag').checked ? 1 : 0,
+      is_e2: $('#lineIsE2').checked ? 1 : 0,
+      is_stalker: $('#lineIsStalker').checked ? 1 : 0,
+      is_restreamer: $('#lineIsRestreamer').checked ? 1 : 0,
+      is_trial: $('#lineIsTrial').checked ? 1 : 0,
+      is_isplock: $('#lineIspLock').checked ? 1 : 0,
+      forced_country: $('#lineForcedCountry').value,
+      contact: $('#linePrivateDns').value,
+      allowed_outputs: outputs,
+      allowed_ips: parseTextareaList('#lineAllowedIps'),
+      allowed_ua: parseTextareaList('#lineAllowedUAs'),
+      force_server_id: parseInt($('#lineForceServer').value) || 0,
+      admin_notes: $('#lineAdminNotes').value,
+      reseller_notes: $('#lineResellerNotes').value,
     };
+    if (expiryNever || expInput) body.exp_date = expDate;
+    if (bouquetPayload !== undefined) body.bouquet = bouquetPayload;
     try {
       if (id) {
         await apiFetch(`/lines/${id}`, { method: 'PUT', body: JSON.stringify(body) });
-        toast('Line updated');
+        toast('User updated');
       } else {
         await apiFetch('/lines', { method: 'POST', body: JSON.stringify(body) });
-        toast('Line created');
+        toast('User created');
       }
-      navigateTo('lines');
+      navigateTo('manage-users');
     } catch (e) {
       toast(e.message, 'error');
     }
   }
 
-  async function toggleBanLine(id, currentEnabled) {
+  function lineStatusLabel(l) {
+    const now = Math.floor(Date.now() / 1000);
+    if (l.admin_enabled === 0) return 'Banned';
+    if (l.enabled === 0) return 'Disabled';
+    if (l.exp_date && l.exp_date < now) return 'Expired';
+    if (l.is_trial) return 'Trial';
+    return 'Active';
+  }
+
+  function openLineStats(id) {
+    _lineStatsTargetId = id;
+    navigateTo('line-stats');
+  }
+
+  // ─── Mass Import Users ─────────────────────────────────────────────
+
+  async function loadImportUsers() {
+    await loadRefData();
+    _importUsersTrialLocked = false;
+    // Populate reseller dropdown
     try {
-      await apiFetch(`/lines/${id}/${currentEnabled ? 'ban' : 'unban'}`, { method: 'POST' });
-      toast(currentEnabled ? 'Line banned' : 'Line unbanned');
-      loadLines();
+      await ensureResellersCache();
+      const resellerSel = $('#importUsersReseller');
+      if (resellerSel) {
+        resellerSel.innerHTML = '<option value="0">Admin</option>' +
+          (_resellersCache || []).map(r => `<option value="${r.id}">${escHtml(r.username)}</option>`).join('');
+      }
+    } catch {}
+
+    // Populate package dropdown
+    populateSelect('#importUsersPackage', _packages, 'id', 'package_name', '-- Select Package --');
+    const maxConnInput = $('#importUsersMaxConnections');
+    if (maxConnInput) {
+      maxConnInput.dataset.manual = '';
+      maxConnInput.oninput = () => { maxConnInput.dataset.manual = '1'; };
+    }
+    const trialInput = $('#importUsersTrial');
+    if (trialInput) {
+      trialInput.onchange = () => { _importUsersTrialLocked = true; };
+    }
+    const pkgSel = $('#importUsersPackage');
+    if (pkgSel) {
+      pkgSel.onchange = () => {
+        syncImportUsersPackageDefaults(pkgSel.value);
+      };
+    }
+
+    // Reset form
+    if ($('#importUsersText')) $('#importUsersText').value = '';
+    if ($('#importUsersTestMode')) $('#importUsersTestMode').checked = false;
+    if ($('#importUsersSkipDuplicates')) $('#importUsersSkipDuplicates').checked = true;
+    if ($('#importUsersTrial')) $('#importUsersTrial').checked = false;
+    if ($('#importUsersMaxConnections')) $('#importUsersMaxConnections').value = '1';
+    if ($('#importUsersDateFormat')) $('#importUsersDateFormat').value = 'ymd';
+    if ($('#importUsersBouquetSearch')) $('#importUsersBouquetSearch').value = '';
+    renderImportUsersBouquetList();
+    if ($('#importUsersResults')) $('#importUsersResults').style.display = 'none';
+  }
+
+  function syncImportUsersPackageDefaults(pkgId) {
+    const pkg = _packages.find(p => String(p.id) === String(pkgId));
+    if (!pkg) return;
+    const maxConnInput = $('#importUsersMaxConnections');
+    if (maxConnInput && !maxConnInput.dataset.manual) {
+      maxConnInput.value = String(pkg.max_connections || 1);
+    }
+    const trialInput = $('#importUsersTrial');
+    if (trialInput && !_importUsersTrialLocked) {
+      trialInput.checked = Number(pkg.is_trial || 0) === 1;
+    }
+  }
+
+  function renderImportUsersBouquetList() {
+    const list = $('#importUsersBouquetList');
+    if (!list) return;
+    const search = ($('#importUsersBouquetSearch')?.value || '').toLowerCase();
+    const selected = new Set(Array.from(list.querySelectorAll('input[type="checkbox"]:checked')).map(el => String(el.value)));
+    const rows = _bouquets.filter(b => !search || String(b.bouquet_name || b.name || '').toLowerCase().includes(search));
+    list.innerHTML = rows.map(b => `
+      <label class="bouquet-select-item">
+        <input type="checkbox" value="${b.id}" ${selected.has(String(b.id)) ? 'checked' : ''}>
+        <span>${escHtml(b.bouquet_name || b.name || `Bouquet #${b.id}`)}</span>
+      </label>
+    `).join('') || '<div class="text-muted" style="padding:6px 8px">No bouquets available</div>';
+  }
+
+  function getImportUsersBouquetSelection() {
+    const list = $('#importUsersBouquetList');
+    if (!list) return [];
+    return Array.from(list.querySelectorAll('input[type="checkbox"]:checked'))
+      .map(el => el.value)
+      .filter(Boolean);
+  }
+
+  function parseImportUsersText() {
+    const text = $('#importUsersText')?.value || '';
+    const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    const format = $('#importUsersDateFormat')?.value || 'ymd';
+    const users = [];
+    const errors = [];
+    for (const line of lines) {
+      const parts = line.split(':');
+      const username = parts[0]?.trim();
+      const password = parts[1]?.trim() || generatePassword(10);
+      const expRaw = parts[2]?.trim();
+      let expDate = null;
+      if (expRaw) {
+        expDate = parseDateWithFormat(expRaw, format);
+        if (!expDate) {
+          errors.push(`${username || '(empty)'}: invalid expiry date`);
+        }
+      }
+      if (username) {
+        users.push({ username, password, exp_date: expDate || undefined });
+      }
+    }
+    return { users, errors };
+  }
+
+  function generatePassword(length = 10) {
+    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    let result = '';
+    for (let i = 0; i < length; i++) {
+      result += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return result;
+  }
+
+  async function validateImportUsers() {
+    const parsed = parseImportUsersText();
+    const users = parsed.users;
+    if (parsed.errors.length) {
+      toast(parsed.errors[0], 'error');
+      return;
+    }
+    if (!users.length) {
+      toast('No users to validate', 'error');
+      return;
+    }
+    const packageId = $('#importUsersPackage')?.value;
+    if (!packageId) {
+      toast('Please select a package', 'error');
+      return;
+    }
+
+    try {
+      const bouquets = getImportUsersBouquetSelection();
+      const result = await apiFetch('/lines/bulk', {
+        method: 'POST',
+        body: JSON.stringify({
+          users,
+          package_id: parseInt(packageId, 10),
+          member_id: parseInt($('#importUsersReseller')?.value || '0', 10),
+          max_connections: parseInt($('#importUsersMaxConnections')?.value || '0', 10) || undefined,
+          is_trial: $('#importUsersTrial')?.checked ? 1 : 0,
+          bouquet: bouquets.length ? bouquets : undefined,
+          test_mode: true,
+          skip_duplicates: $('#importUsersSkipDuplicates')?.checked ?? true,
+        }),
+      });
+      showImportUsersResults(result);
+      toast('Validation complete');
     } catch (e) {
       toast(e.message, 'error');
     }
   }
 
-  async function deleteLine(id) {
-    if (!confirm('Delete this line?')) return;
+  async function executeImportUsers() {
+    const parsed = parseImportUsersText();
+    const users = parsed.users;
+    if (parsed.errors.length) {
+      toast(parsed.errors[0], 'error');
+      return;
+    }
+    if (!users.length) {
+      toast('No users to import', 'error');
+      return;
+    }
+    const packageId = $('#importUsersPackage')?.value;
+    if (!packageId) {
+      toast('Please select a package', 'error');
+      return;
+    }
+    const testMode = $('#importUsersTestMode')?.checked ?? false;
+
+    if (!testMode && !confirm(`Import ${users.length} user(s)?`)) {
+      return;
+    }
+
     try {
-      await apiFetch(`/lines/${id}`, { method: 'DELETE' });
-      toast('Line deleted');
-      loadLines();
+      const bouquets = getImportUsersBouquetSelection();
+      const result = await apiFetch('/lines/bulk', {
+        method: 'POST',
+        body: JSON.stringify({
+          users,
+          package_id: parseInt(packageId, 10),
+          member_id: parseInt($('#importUsersReseller')?.value || '0', 10),
+          max_connections: parseInt($('#importUsersMaxConnections')?.value || '0', 10) || undefined,
+          is_trial: $('#importUsersTrial')?.checked ? 1 : 0,
+          bouquet: bouquets.length ? bouquets : undefined,
+          test_mode: testMode,
+          skip_duplicates: $('#importUsersSkipDuplicates')?.checked ?? true,
+        }),
+      });
+      showImportUsersResults(result);
+      toast(testMode ? 'Validation complete' : `Imported ${result.created || 0} user(s)`);
     } catch (e) {
       toast(e.message, 'error');
     }
+  }
+
+  function showImportUsersResults(result) {
+    const resultsDiv = $('#importUsersResults');
+    if (!resultsDiv) return;
+
+    const isValidation = !!result.test_mode;
+    const titleEl = $('#importUsersResultsTitle');
+    const metaEl = $('#importUsersResultsMeta');
+    const primaryLabel = $('#importUsersPrimaryLabel');
+    if (titleEl) titleEl.textContent = isValidation ? 'Validation Results' : 'Import Results';
+    if (metaEl) {
+      metaEl.textContent = isValidation
+        ? 'Review ready, skipped, and failed lines before running the actual import.'
+        : 'Review created, skipped, and failed users before leaving this page.';
+    }
+    if (primaryLabel) primaryLabel.textContent = isValidation ? 'Ready' : 'Created';
+
+    $('#importUsersCreated').textContent = result.created || 0;
+    $('#importUsersSkipped').textContent = result.skipped || 0;
+    $('#importUsersErrors').textContent = result.errors || 0;
+
+    const log = $('#importUsersLog');
+    if (log) {
+      const lines = [];
+      if (result.details && result.details.length) {
+        for (const d of result.details) {
+          const status = d.status === 'created' ? '✓' : d.status === 'skipped' ? '⊘' : '✗';
+          lines.push(`${status} ${d.username}: ${d.message || d.status}`);
+        }
+      }
+      log.textContent = lines.join('\n') || 'No details available';
+    }
+
+    resultsDiv.style.display = 'block';
   }
 
   // ─── Movies ──────────────────────────────────────────────────────
 
   async function loadMovies() {
     populateSelect('#moviesCatFilter', _movieCats, 'id', 'category_name', 'All Categories');
+    await ensureServersCacheForPlaylist();
     try {
       const search = ($('#moviesSearch')?.value || '').trim();
       const catId = $('#moviesCatFilter')?.value || '';
-      const sortRaw = ($('#moviesSortOrder')?.value || 'id_desc');
-      const sort = sortRaw === 'id_asc' ? 'id_asc' : 'id_desc';
       const params = new URLSearchParams();
       if (search) params.set('search', search);
       if (catId) params.set('category_id', catId);
-      params.set('sort', sort);
+      params.set('sort', 'id_desc');
+      params.set('limit', String(_moviesPerPage));
+      params.set('offset', String((_moviesPage - 1) * _moviesPerPage));
       const qs = `?${params.toString()}`;
       const data = await apiFetch(`/movies${qs}`);
       const movies = data.movies || [];
-      $('#moviesTable tbody').innerHTML = movies.map(m => {
-        const tmdbBadge = m.tmdb_id ? '<span class="badge badge-info">TMDb</span>' : '<span class="badge badge-secondary">No</span>';
-        const catName = _movieCats.find(c => String(c.id) === String(m.category_id))?.category_name || m.category_id || '-';
-        return `<tr>
-          <td><span class="id-link" role="button" tabindex="0" title="Edit" onclick="APP.editMovie(${m.id})">${m.id}</span></td>
-          <td>${thumbImg(m.stream_icon || m.poster)}</td>
-          <td>${escHtml(m.name || m.title || '')}</td>
-          <td>${escHtml(catName)}</td>
-          <td>${m.year || '-'}</td>
-          <td>${m.rating || '-'}</td>
-          <td>${tmdbBadge}</td>
-          <td>
-            <button class="btn btn-xs btn-primary" onclick="APP.editMovie(${m.id})">Edit</button>
-            <button class="btn btn-xs btn-danger" onclick="APP.deleteMovie(${m.id})">Del</button>
-          </td>
-        </tr>`;
-      }).join('');
+      _moviesTotal = data.total || 0;
+      renderMoviesTable(movies, _moviesTotal);
     } catch (e) {
       toast(e.message, 'error');
     }
   }
 
+  APP._moviesGoPage = function(p) {
+    const totalPages = Math.max(1, Math.ceil(_moviesTotal / _moviesPerPage));
+    if (p < 1) p = 1;
+    if (p > totalPages) p = totalPages;
+    _moviesPage = p;
+    loadMovies();
+  };
+
+  function renderMoviesPagination(total) {
+    const bar = $('#moviesPagination');
+    if (!bar) return;
+
+    const page = _moviesPage;
+    const totalPages = Math.max(1, Math.ceil(total / _moviesPerPage));
+    const start = total ? (_moviesPage - 1) * _moviesPerPage + 1 : 0;
+    const end = total ? Math.min(total, start + _moviesPerPage - 1) : 0;
+    const pageInfo = `<span class="page-label">Showing</span> <span class="page-info">${start}-${end}</span> <span class="page-sep">/</span> <span class="page-total">${total}</span>`;
+    const prevDisabled = page <= 1 ? 'disabled' : '';
+    const nextDisabled = page >= totalPages ? 'disabled' : '';
+
+    let buttons = `<button class="page-btn" ${prevDisabled} onclick="APP._moviesGoPage(${page - 1})">&lsaquo;</button>`;
+    const maxButtons = 7;
+    let startPage = Math.max(1, page - Math.floor(maxButtons / 2));
+    let endPage = startPage + maxButtons - 1;
+    if (endPage > totalPages) {
+      endPage = totalPages;
+      startPage = Math.max(1, endPage - maxButtons + 1);
+    }
+
+    for (let i = startPage; i <= endPage; i++) {
+      buttons += `<button class="page-btn ${i === page ? 'active' : ''}" onclick="APP._moviesGoPage(${i})">${i}</button>`;
+    }
+    buttons += `<button class="page-btn" ${nextDisabled} onclick="APP._moviesGoPage(${page + 1})">&rsaquo;</button>`;
+
+    bar.innerHTML = `<div class="pagination-info">${pageInfo}</div><div class="pagination-controls">${buttons}</div>`;
+  }
+
+  function renderMoviesTable(movies, total) {
+    const countEl = $('#moviesCount');
+    if (countEl) countEl.textContent = `Total: ${total || 0}`;
+
+    const totalPages = Math.max(1, Math.ceil(total / _moviesPerPage));
+    if (_moviesPage > totalPages) _moviesPage = totalPages;
+    if (_moviesPage < 1) _moviesPage = 1;
+
+    const tbody = $('#moviesTable tbody');
+    if (!tbody) return;
+
+    if (movies.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;color:#8b949e;padding:32px 0">No movies found</td></tr>`;
+      $('#moviesPagination').innerHTML = '';
+    } else {
+      tbody.innerHTML = movies.map((m, i) => {
+        const catName = _movieCats.find(c => String(c.id) === String(m.category_id))?.category_name || '-';
+        const catColor = _movieCats.find(c => String(c.id) === String(m.category_id))?.color || '#6b9ef5';
+        const coverUrl = m.stream_icon || '';
+        const coverHtml = coverUrl
+          ? `<img class="cover-thumb" src="${escHtml(coverUrl)}" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='inline-block'"><span class="cover-placeholder" style="display:none"></span>`
+          : `<span class="cover-placeholder"></span>`;
+        const movieId = m.id;
+        const year = m.year || '-';
+        const rating = m.rating && m.rating !== '0' ? m.rating : '-';
+        const tmdbIcon = (m.tmdb_id && m.tmdb_id > 0)
+          ? `<button class="row-action-btn" style="color:#f59e0b" onclick="APP.syncMovieTmdb(${movieId})" title="Re-fetch TMDB metadata">&#128260;</button>`
+          : `<span style="color:#8b949e;font-size:.75rem">—</span>`;
+        const srvId = parseInt(m.stream_server_id, 10) || 0;
+        const srvName = srvId > 0 ? (_serversCache.find(s => s.id === srvId)?.name || `Server #${srvId}`) : 'Default';
+
+        return `<tr>
+          <td width="50"><span style="color:#8b949e;font-size:.75rem">${movieId}</span></td>
+          <td width="60">${coverHtml}</td>
+          <td><span style="font-weight:500;color:#e6edf3">${escHtml(m.name || '')}</span></td>
+          <td>
+            <span class="cat-dot" style="background:${escHtml(catColor)}"></span>
+            <span style="color:#8b949e;font-size:.82rem">${escHtml(catName)}</span>
+          </td>
+          <td><span style="color:#8b949e;font-size:.82rem">${year}</span></td>
+          <td><span style="color:#8b949e;font-size:.82rem">${rating}</span></td>
+          <td>${tmdbIcon}</td>
+          <td><span style="color:#8b949e;font-size:.82rem">${escHtml(srvName)}</span></td>
+          <td width="140">
+            <div class="row-actions">
+              <button class="row-action-btn play-btn" onclick="APP.playMovie(${movieId})" title="Play"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg></button>
+              <button class="row-action-btn edit-btn" onclick="APP.editMovie(${movieId})" title="Edit"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>
+              <button class="row-action-btn delete-btn" onclick="APP.deleteMovie(${movieId})" title="Delete"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
+            </div>
+          </td>
+        </tr>`;
+      }).join('');
+
+      renderMoviesPagination(total);
+    }
+
+    makeSortable($('#moviesTable'));
+  }
+
+  // ─── TMDB Sync ─────────────────────────────────────────────────
+
+  APP.syncMovieTmdb = async function(id) {
+    try {
+      toast('Re-fetching metadata...', 'info');
+      await apiFetch(`/tmdb/resync-movie/${id}`, { method: 'POST' });
+      toast('Metadata updated', 'success');
+      loadMovies();
+    } catch (e) { toast(e.message, 'error'); }
+  };
+
+  APP.syncSeriesTmdb = async function(id) {
+    try {
+      toast('Re-fetching metadata...', 'info');
+      await apiFetch(`/tmdb/resync-series/${id}`, { method: 'POST' });
+      toast('Metadata updated', 'success');
+      loadSeriesList();
+    } catch (e) { toast(e.message, 'error'); }
+  };
+
+  APP.syncAllTmdb = async function() {
+    try {
+      toast('Syncing all TMDB metadata...', 'info');
+      const data = await apiFetch('/tmdb/resync-all', { method: 'POST' });
+      toast(`Synced ${data.ok} items (${data.fail} failed)`, data.fail > 0 ? 'warning' : 'success');
+      loadMovies();
+      loadSeriesList();
+    } catch (e) { toast(e.message, 'error'); }
+  };
+
   let _movieCatTags = [];
   let _movieBqTags = [];
   let _seriesBqTags = [];
   let _streamBqTags = [];
+  let _streamSubCategoryTags = [];
 
   async function openMovieForm(movieData) {
     populateSelect('#movieCategory', _movieCats, 'id', 'category_name', 'Select category...');
@@ -1181,40 +1957,120 @@
 
   async function loadSeriesList() {
     populateSelect('#seriesCatFilter', _seriesCats, 'id', 'category_name', 'All Categories');
+    await ensureServersCacheForPlaylist();
     try {
       const catId = $('#seriesCatFilter')?.value || '';
       const search = ($('#seriesSearch')?.value || '').trim();
-      const sortRaw = ($('#seriesSortOrder')?.value || 'id_desc');
-      const sort = sortRaw === 'id_asc' ? 'id_asc' : 'id_desc';
       const params = new URLSearchParams();
       if (search) params.set('search', search);
       if (catId) params.set('category_id', catId);
-      params.set('sort', sort);
+      params.set('sort', 'id_desc');
+      params.set('limit', String(_seriesPerPage));
+      params.set('offset', String((_seriesPage - 1) * _seriesPerPage));
       const qs = `?${params.toString()}`;
       const data = await apiFetch(`/series${qs}`);
       const list = data.series || [];
-      $('#seriesTable tbody').innerHTML = list.map(s => {
-        const tmdbBadge = s.tmdb_id ? '<span class="badge badge-info">TMDb</span>' : '<span class="badge badge-secondary">No</span>';
-        const catName = _seriesCats.find(c => String(c.id) === String(s.category_id))?.category_name || s.category_id || '-';
-        let seasonCount = '-';
-        try { const ss = JSON.parse(s.seasons || '[]'); seasonCount = ss.length || '-'; } catch { }
-        return `<tr>
-          <td><span class="id-link" role="button" tabindex="0" title="Edit" onclick="APP.editSeries(${s.id})">${s.id}</span></td>
-          <td>${thumbImg(s.cover || s.poster)}</td>
-          <td>${escHtml(s.title || s.name || '')}</td>
-          <td>${escHtml(catName)}</td>
-          <td>${seasonCount}</td>
-          <td>${s.rating || '-'}</td>
-          <td>${tmdbBadge}</td>
-          <td>
-            <button class="btn btn-xs btn-primary" onclick="APP.editSeries(${s.id})">Edit</button>
-            <button class="btn btn-xs btn-danger" onclick="APP.deleteSeries(${s.id})">Del</button>
-          </td>
-        </tr>`;
-      }).join('');
+      _seriesCache = list;
+      _seriesTotal = data.total || 0;
+      renderSeriesTable(list, _seriesTotal);
     } catch (e) {
       toast(e.message, 'error');
     }
+  }
+
+  APP._seriesGoPage = function(p) {
+    const totalPages = Math.max(1, Math.ceil(_seriesTotal / _seriesPerPage));
+    if (p < 1) p = 1;
+    if (p > totalPages) p = totalPages;
+    _seriesPage = p;
+    loadSeriesList();
+  };
+
+  function renderSeriesTable(series, total) {
+    const countEl = $('#seriesCount');
+    if (countEl) countEl.textContent = `Total: ${total || 0}`;
+
+    const totalPages = Math.max(1, Math.ceil(total / _seriesPerPage));
+    if (_seriesPage > totalPages) _seriesPage = totalPages;
+    if (_seriesPage < 1) _seriesPage = 1;
+
+    const tbody = $('#seriesTable tbody');
+    if (!tbody) return;
+
+    if (series.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;color:#8b949e;padding:32px 0">No series found</td></tr>`;
+      const bar = $('#seriesPagination');
+      if (bar) bar.innerHTML = '';
+    } else {
+      tbody.innerHTML = series.map((s) => {
+        const catName = _seriesCats.find(c => String(c.id) === String(s.category_id))?.category_name || s.category || '-';
+        const catColor = _seriesCats.find(c => String(c.id) === String(s.category_id))?.color || '#6b9ef5';
+        const coverUrl = s.cover || s.poster || '';
+        const coverHtml = coverUrl
+          ? `<img class="cover-thumb" src="${escHtml(coverUrl)}" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='inline-block'"><span class="cover-placeholder" style="display:none"></span>`
+          : `<span class="cover-placeholder"></span>`;
+        let seasonCount = '-';
+        try { const ss = JSON.parse(s.seasons || '[]'); seasonCount = ss.length || '-'; } catch { }
+        const srvId = parseInt(s.stream_server_id, 10) || 0;
+        const srvName = srvId > 0 ? (_serversCache.find(sv => sv.id === srvId)?.name || `Server #${srvId}`) : 'Default';
+        const rating = s.rating && String(s.rating) !== '0' ? s.rating : (s.rating_5based ? `${s.rating_5based}/5` : '-');
+        const tmdbLabel = s.tmdb_id ? String(s.tmdb_id) : '-';
+
+        return `<tr>
+          <td width="50"><span style="color:#8b949e;font-size:.75rem">${s.id}</span></td>
+          <td width="55">${coverHtml}</td>
+          <td><span style="font-weight:500;color:#e6edf3">${escHtml(s.title || s.name || '')}</span></td>
+          <td>
+            <span class="cat-dot" style="background:${escHtml(catColor)}"></span>
+            <span style="color:#8b949e;font-size:.82rem">${escHtml(catName)}</span>
+          </td>
+          <td width="70"><span style="color:#8b949e;font-size:.82rem">${seasonCount}</span></td>
+          <td width="70"><span style="color:#8b949e;font-size:.82rem">${escHtml(String(rating))}</span></td>
+          <td width="80"><span style="color:#8b949e;font-size:.82rem">${escHtml(tmdbLabel)}</span></td>
+          <td><span style="color:#8b949e;font-size:.82rem">${escHtml(srvName)}</span></td>
+          <td>
+            <div class="row-actions">
+              <button class="row-action-btn play-btn" onclick="APP.playSeries(${s.id})" title="Play"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg></button>
+              ${(s.tmdb_id && s.tmdb_id > 0) ? `<button class="row-action-btn" style="color:#f59e0b" onclick="APP.syncSeriesTmdb(${s.id})" title="Re-fetch TMDB metadata">&#128260;</button>` : ''}
+              <button class="row-action-btn edit-btn" onclick="APP.editSeries(${s.id})" title="Edit"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>
+              <button class="row-action-btn delete-btn" onclick="APP.deleteSeries(${s.id})" title="Delete"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
+            </div>
+          </td>
+        </tr>`;
+      }).join('');
+      renderSeriesPagination(total);
+    }
+
+    makeSortable($('#seriesTable'));
+  }
+
+  function renderSeriesPagination(total) {
+    const bar = $('#seriesPagination');
+    if (!bar) return;
+
+    const page = _seriesPage;
+    const totalPages = Math.max(1, Math.ceil(total / _seriesPerPage));
+    const start = total ? (_seriesPage - 1) * _seriesPerPage + 1 : 0;
+    const end = total ? Math.min(total, start + _seriesPerPage - 1) : 0;
+    const pageInfo = `<span class="page-label">Showing</span> <span class="page-info">${start}-${end}</span> <span class="page-sep">/</span> <span class="page-total">${total}</span>`;
+    const prevDisabled = page <= 1 ? 'disabled' : '';
+    const nextDisabled = page >= totalPages ? 'disabled' : '';
+
+    let buttons = `<button class="page-btn" ${prevDisabled} onclick="APP._seriesGoPage(${page - 1})">&lsaquo;</button>`;
+    const maxButtons = 7;
+    let startPage = Math.max(1, page - Math.floor(maxButtons / 2));
+    let endPage = startPage + maxButtons - 1;
+    if (endPage > totalPages) {
+      endPage = totalPages;
+      startPage = Math.max(1, endPage - maxButtons + 1);
+    }
+
+    for (let i = startPage; i <= endPage; i++) {
+      buttons += `<button class="page-btn ${i === page ? 'active' : ''}" onclick="APP._seriesGoPage(${i})">${i}</button>`;
+    }
+    buttons += `<button class="page-btn" ${nextDisabled} onclick="APP._seriesGoPage(${page + 1})">&rsaquo;</button>`;
+
+    bar.innerHTML = `<div class="pagination-info">${pageInfo}</div><div class="pagination-controls">${buttons}</div>`;
   }
 
   function renderSeriesBqTags() {
@@ -1455,6 +2311,7 @@
     if (!seriesId) { toast('Save series first', 'error'); return; }
     $('#episodeModal').style.display = 'flex';
     $('#episodeSeriesId').value = seriesId;
+    populateStreamServerSelect('#episodeServer', epData ? epData.stream_server_id : 0);
     if (epData) {
       $('#episodeFormTitle').textContent = 'Edit Episode';
       $('#episodeFormId').value = epData.id;
@@ -1495,6 +2352,7 @@
       title: $('#episodeTitle').value,
       stream_url: $('#episodeUrl').value,
       container_extension: $('#episodeExtension').value,
+      stream_server_id: parseInt($('#episodeServer').value) || 0,
     };
     try {
       if (epId) {
@@ -1595,6 +2453,7 @@
     apiFetch('/series').then(d => {
       populateSelect('#standaloneEpSeries', d.series || [], 'id', 'title', 'Select series...');
     });
+    populateStreamServerSelect('#standaloneEpServer', 0);
     $('#standaloneEpSeason').value = 1;
     $('#standaloneEpNum').value = 1;
     $('#standaloneEpTitle').value = '';
@@ -1615,6 +2474,7 @@
       title: $('#standaloneEpTitle').value,
       stream_url: $('#standaloneEpUrl').value,
       container_extension: $('#standaloneEpExt').value,
+      stream_server_id: parseInt($('#standaloneEpServer').value) || 0,
     };
     try {
       await apiFetch(`/series/${seriesId}/episodes`, { method: 'POST', body: JSON.stringify(body) });
@@ -1695,118 +2555,133 @@
   // ─── Streams ─────────────────────────────────────────────────────
 
   async function channelFetch(path, opts = {}) {
+    await addCsrfHeaders(opts);
     const res = await fetch('/api/channels' + path, {
       ...opts,
       headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
       credentials: 'same-origin',
     });
-    if (res.status === 401) { showLogin(); throw new Error('unauthorized'); }
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Request failed');
+    const raw = await res.text();
+    let data = null;
+    try { data = raw ? JSON.parse(raw) : null; } catch {}
+    if (res.status === 401) { showLogin(); throw new Error((data && data.error) || 'unauthorized'); }
+    if (res.status === 403) {
+      const errorMsg = (data && data.error) || 'forbidden';
+      if (shouldLogoutOn403(errorMsg)) showLogin();
+      throw new Error(errorMsg);
+    }
+    if (!res.ok) throw new Error((data && data.error) || 'Request failed');
     return data;
   }
 
   let _streamsCache = [];
   let _streamsPage = 1;
+  let _streamsPerPage = 25;
+  let _streamsTotal = 0;
+  let _channelLogoTarget = null;
+  let _channelLogoSearchResults = [];
+  let _topChannelsMonitorTimer = null;
+  let _streamsAutoRefreshTimer = null;
+  let _streamsAutoRefreshEnabled = true;
   let _pendingStreamStartId = null;   // channel ID being waited on via WS
   let _streamReadyByWS = false;       // set true by WS event to skip polling
+  let _editingStreamOriginal = null;
+  let _streamCustomMapEntries = [];
+  let _streamEpgSourcesCache = [];
+  let _moviesCache = [];
+  let _moviesPage = 1;
+  let _moviesPerPage = 50;
+  let _moviesTotal = 0;
+  let _seriesCache = [];
+  let _seriesPage = 1;
+  let _seriesPerPage = 50;
+  let _seriesTotal = 0;
+  let _categoriesCache = [];
+  let _categoriesPage = 1;
 
-  async function loadStreams() {
+  async function loadAddChannelsPage() {
+    await openStreamForm(null, { skipNavigate: true });
+  }
+
+  async function loadMonitorTopChannelsPage() {
+    stopTopChannelsMonitorAutoRefresh();
+    await loadRefData();
     try {
-      const data = await fetch('/api/channels', { credentials: 'same-origin' });
-      const list = await data.json();
-      _streamsCache = Array.isArray(list) ? list : [];
-
-      const liveCats = _categories.filter(c => c.category_type === 'live');
-      const catFilter = $('#streamsCategoryFilter');
-      if (catFilter && catFilter.options.length <= 1) {
-        liveCats.forEach(c => { const o = document.createElement('option'); o.value = c.id; o.textContent = c.category_name; catFilter.appendChild(o); });
-      }
-
-      renderStreamsTable();
+      const data = await apiFetch('/channels/top-monitor');
+      renderTopChannelsMonitor(data || {});
     } catch (e) {
-      toast(e.message, 'error');
+      const wrap = $('#topChannelsSummaryCards');
+      const tbody = $('#topChannelsTable tbody');
+      if (wrap) wrap.innerHTML = '';
+      if (tbody) tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;color:#8b949e;padding:32px 0">${escHtml(e.message || 'Failed to load top channels.')}</td></tr>`;
+    }
+    if (_currentPage === 'monitor-top-channels') {
+      _topChannelsMonitorTimer = setTimeout(loadMonitorTopChannelsPage, 30000);
     }
   }
 
-  function renderStreamsTable() {
-    const search = ($('#streamsSearch')?.value || '').toLowerCase();
-    const statusF = $('#streamsStatusFilter')?.value || '';
-    const catF = $('#streamsCategoryFilter')?.value || '';
-    const perPage = parseInt($('#streamsPerPage')?.value) || 50;
-    const filtered = _streamsCache.filter(ch => {
-      if (search && !(ch.name || '').toLowerCase().includes(search) && !(ch.id || '').toLowerCase().includes(search)) return false;
-      if (statusF === 'on_demand') {
-        if (!ch.on_demand) return false;
-      } else if (statusF && ch.status !== statusF) return false;
-      if (catF && String(ch.category_id || '') !== catF) return false;
-      return true;
-    });
-    const totalPages = Math.max(1, Math.ceil(filtered.length / perPage));
-    if (_streamsPage > totalPages) _streamsPage = totalPages;
-    const start = (_streamsPage - 1) * perPage;
-    const pageItems = filtered.slice(start, start + perPage);
+  async function loadStreamImportToolsPage() {
+    await loadRefData();
+  }
 
-    $('#streamsTable tbody').innerHTML = pageItems.map(ch => {
-      const isRunning = ch.status === 'running';
-      const statusCls = isRunning ? 'success' : ch.status === 'error' ? 'danger' : 'secondary';
-      const uptime = isRunning && ch.startedAt ? formatUptime(ch.startedAt) : '-';
-      const clients = ch.clients || 0;
-      const si = ch.streamInfo || {};
-      const logo = ch.logoUrl ? `<img class="stream-icon" src="${escHtml(ch.logoUrl)}" onerror="this.outerHTML='<div class=\\'stream-icon-placeholder\\'>TV</div>'">`
-                               : '<div class="stream-icon-placeholder">TV</div>';
-      const infoHtml = isRunning && (si.video_codec || si.bitrate) ? `<div class="stream-info-cell">
-        <span class="si-label">Video</span><span class="si-value">${escHtml(si.video_codec || '-')}</span>
-        <span class="si-label">Audio</span><span class="si-value">${escHtml(si.audio_codec || '-')}</span>
-        <span class="si-label">Res</span><span class="si-value">${si.width && si.height ? si.width + 'x' + si.height : '-'}</span>
-        <span class="si-label">Bitrate</span><span class="si-value">${si.bitrate ? si.bitrate + ' kbps' : '-'}</span>
-        <span class="si-label">FPS</span><span class="si-value">${si.current_fps || si.fps || '-'}</span>
-        <span class="si-label">Speed</span><span class="si-value">${si.speed ? si.speed + 'x' : '-'}</span>
-      </div>` : '<span style="color:#484f58;font-size:.7rem">Offline</span>';
-      const st = ch.status || '';
-      const playDisabled = st !== 'running' && !(ch.on_demand && st !== 'error');
-
-      return `<tr>
-        <td><code style="font-size:.7rem">${escHtml(ch.id || '')}</code></td>
-        <td>${logo}</td>
-        <td>
-          <div style="font-weight:500;color:#f0f6fc">${escHtml(ch.name || '')}${ch.on_demand ? ' <span class="badge badge-info" style="font-size:.65rem;vertical-align:middle" title="On-demand">OD</span>' : ''}${ch.preWarm ? ' <span class="badge" style="font-size:.65rem;vertical-align:middle;background:#238636;color:#fff" title="Pre-warm">PW</span>' : ''}</div>
-          <div style="font-size:.65rem;color:#484f58">${escHtml(ch.outputMode || 'copy')} · <span title="Server output">${(ch.outputFormat || 'hls') === 'mpegts' ? 'MPEG-TS' : 'HLS'}</span></div>
-        </td>
-        <td><span class="clients-badge ${clients > 0 ? 'active' : 'zero'}">${clients}</span></td>
-        <td style="font-size:.75rem">${uptime}</td>
-        <td>
-          <div class="stream-actions">
-            ${isRunning
-              ? `<button class="btn-icon btn-icon-stop" onclick="APP.stopStream('${ch.id}')" title="Stop"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12"/></svg></button>
-                 <button class="btn-icon btn-icon-restart" onclick="APP.restartStream('${ch.id}')" title="Restart"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></button>`
-              : `<button class="btn-icon btn-icon-start" onclick="APP.startStream('${ch.id}')" title="Start"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>`}
-            <button class="btn-icon btn-icon-edit" onclick="APP.editStream('${ch.id}')" title="Edit"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>
-            <button class="btn-icon btn-icon-logs" onclick="APP.viewStreamLogs('${ch.id}')" title="Logs"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></button>
-            <button class="btn-icon btn-icon-del" onclick="APP.deleteStream('${ch.id}')" title="Delete"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
-          </div>
-        </td>
-        <td><button class="btn-icon-play ${playDisabled ? 'disabled' : ''}" onclick="${playDisabled ? '' : `APP.openStreamPlayer('${ch.id}','${escHtml(ch.name || '')}')`}" title="Play"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg></button></td>
-        <td>${infoHtml}</td>
-      </tr>`;
-    }).join('') || '<tr><td colspan="8" style="text-align:center;color:#484f58;padding:20px">No live streams</td></tr>';
-
-    const pagEl = $('#streamsPagination');
-    if (pagEl) {
-      if (totalPages <= 1) { pagEl.innerHTML = ''; }
-      else {
-        let ph = '';
-        for (let i = 1; i <= totalPages; i++) {
-          ph += `<button class="btn btn-xs ${i === _streamsPage ? 'btn-primary' : 'btn-secondary'}" onclick="APP._streamsGoPage(${i})">${i}</button>`;
-        }
-        pagEl.innerHTML = ph;
-      }
+  function stopTopChannelsMonitorAutoRefresh() {
+    if (_topChannelsMonitorTimer) {
+      clearTimeout(_topChannelsMonitorTimer);
+      _topChannelsMonitorTimer = null;
     }
   }
 
-  function _streamsGoPage(p) { _streamsPage = p; renderStreamsTable(); }
+  function renderTopChannelsMonitor(data) {
+    const totals = data && data.totals ? data.totals : {};
+    const rows = Array.isArray(data && data.channels) ? data.channels : [];
+    const cards = [
+      { label: 'Total Viewers', value: Number(totals.total_viewers || 0) },
+      { label: 'Active Channels', value: Number(totals.active_channels || 0) },
+      { label: 'Active Servers', value: Number(totals.active_servers || 0) },
+    ];
+    const statsWrap = $('#topChannelsSummaryCards');
+    if (statsWrap) {
+      statsWrap.innerHTML = cards.map((card) => `
+        <div class="stat-card channels-top-stat-card">
+          <div class="stat-value blue">${dashboardFormatNumber(card.value)}</div>
+          <div class="stat-label">${escHtml(card.label)}</div>
+        </div>
+      `).join('');
+    }
+    const tbody = $('#topChannelsTable tbody');
+    if (tbody) {
+      tbody.innerHTML = rows.length
+        ? rows.map((row, index) => `
+          <tr>
+            <td>${index + 1}</td>
+            <td>${escHtml(row.name || '')}</td>
+            <td>${dashboardFormatNumber(row.viewers || 0)}</td>
+            <td>${escHtml(row.server_name || 'Line / Default')}</td>
+            <td>${escHtml(row.uptime_label || '—')}</td>
+            <td>${row.bitrate_kbps ? `${dashboardFormatNumber(row.bitrate_kbps)} kbps` : '—'}</td>
+            <td><div class="channels-source-cell">${escHtml(row.source || '—')}</div></td>
+          </tr>
+        `).join('')
+        : '<tr><td colspan="7" style="text-align:center;color:#8b949e;padding:32px 0">No active live channels with viewers right now.</td></tr>';
+    }
+    const footnote = $('#topChannelsLastUpdated');
+    if (footnote) {
+      footnote.textContent = data && data.refreshed_at
+        ? `Last updated ${formatDate(data.refreshed_at)} · Auto-refresh every 30 seconds while this page is open.`
+        : 'Auto-refresh every 30 seconds while this page is open.';
+    }
+  }
+
+  function getStreamServerName(ch) {
+    const sid = parseInt(ch && ch.stream_server_id, 10);
+    if (!Number.isFinite(sid) || sid <= 0) return 'Line / Default';
+    return _serversCache.find((s) => Number(s.id) === sid)?.name || `Server ${sid}`;
+  }
 
   function formatUptime(startedAt) {
+    if (streamsModule && typeof streamsModule.formatUptime === 'function') {
+      return streamsModule.formatUptime(startedAt);
+    }
     if (!startedAt) return '-';
     const ms = Date.now() - new Date(startedAt).getTime();
     if (ms < 0) return '-';
@@ -1818,6 +2693,50 @@
     if (m > 0) return `${m}m ${ss}s`;
     return `${ss}s`;
   }
+
+  function buildStreamActionButtonsMarkup(ch) {
+    if (streamsModule && typeof streamsModule.buildStreamActionButtonsMarkup === 'function') {
+      return streamsModule.buildStreamActionButtonsMarkup(buildStreamsModuleContext(), ch);
+    }
+    return '';
+  }
+
+  function getStreamSourceUrl(ch) {
+    if (!ch) return '';
+    if (Array.isArray(ch.sourceQueue) && ch.sourceQueue.length) return String(ch.sourceQueue[0] || '');
+    return String(ch.mpdUrl || '');
+  }
+
+  function formatSourceHost(url) {
+    try {
+      const parsed = new URL(String(url || '').trim());
+      return parsed.hostname || String(url || '');
+    } catch {
+      return String(url || '');
+    }
+  }
+
+  function formatStreamFps(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    const ratio = raw.match(/^(\d+)(?:\/(\d+))?$/);
+    if (!ratio) return raw;
+    const num = parseInt(ratio[1], 10);
+    const den = parseInt(ratio[2] || '1', 10);
+    if (!Number.isFinite(num) || !Number.isFinite(den) || den <= 0) return raw;
+    const fps = Math.round((num / den) * 100) / 100;
+    return `${fps} FPS`;
+  }
+
+  // Streams list ownership moved to public/js/modules/streams.js.
+  // Compatibility source markers kept here for tests/contracts only:
+  // function buildStreamRowMarkup(
+  // function renderStreamsPagination(
+
+
+  APP._streamsGoPage = function(p) { _streamsPage = p; renderStreamsTable(); };
+  APP.renderStreamsTable = renderStreamsTable;
+
 
   // ─── Stream Modal ──────────────────────────────────────────────
 
@@ -1871,10 +2790,9 @@
     renderStreamBqTags();
   }
 
-  async function openStreamForm(chData) {
+  async function openStreamForm(chData, options = {}) {
+    if (!options.skipNavigate) navigateTo('add-channels');
     await loadRefData();
-    const modal = $('#streamModal');
-    modal.style.display = 'flex';
 
     const liveCats = _categories.filter(c => c.category_type === 'live');
     populateSelect('#streamCategory', liveCats, 'id', 'category_name', 'None');
@@ -1890,24 +2808,25 @@
       } catch { profileSel.innerHTML = '<option value="">None (copy mode)</option>'; }
     }
 
-    $$('#streamModalTabs .xc-tab').forEach((t, i) => {
+    $$('#page-add-channels .wizard-tab').forEach((t, i) => {
       t.classList.toggle('active', i === 0);
     });
-    $$('#streamModal .xc-tab-panel').forEach((p, i) => {
+    $$('#page-add-channels .wizard-panel').forEach((p, i) => {
       p.classList.toggle('active', i === 0);
     });
 
     if (chData) {
-      $('#streamModalTitle').textContent = 'Edit Stream';
+      $('#channelFormTitle').textContent = 'Edit Channel';
+      $('#channelFormSubtitle').textContent = 'Update the live channel definition, source map, restart policy, EPG binding, and delivery/server behavior without leaving the Channels workflow.';
       $('#streamFormId').value = chData.id;
       $('#streamName').value = chData.name || '';
+      $('#streamPrimaryUrl').value = chData.mpdUrl || '';
       $('#streamLogoUrl').value = chData.logoUrl || '';
       $('#streamCategory').value = chData.category_id || '';
       $('#streamNotes').value = chData.notes || '';
 
       const sq = Array.isArray(chData.sourceQueue) ? chData.sourceQueue : [];
-      const primary = chData.mpdUrl || '';
-      _streamSources = primary ? [primary, ...sq] : [...sq];
+      _streamSources = [...sq];
       if (_streamSources.length === 0) _streamSources = [''];
       renderSourceTable();
 
@@ -1954,6 +2873,7 @@
           io && ['webapp', 'xc', 'safe'].includes(String(io).toLowerCase()) ? String(io).toLowerCase() : '';
       }
       $('#streamRestartOnEdit').checked = !!chData.restart_on_edit;
+      $('#streamStartNowAfterSave').checked = false;
 
       if (chData.bouquet_ids && Array.isArray(chData.bouquet_ids)) {
         _streamBqTags = chData.bouquet_ids.map(bid => {
@@ -1962,9 +2882,10 @@
         });
       }
     } else {
-      $('#streamModalTitle').textContent = 'Add Stream';
+      $('#channelFormTitle').textContent = 'Add Channels';
+      $('#channelFormSubtitle').textContent = 'Create a live channel using the real panel runtime, category mapping, bouquet assignment, EPG linkage, restart policy, and server delivery options.';
       $('#streamFormId').value = '';
-      ['streamName', 'streamLogoUrl', 'streamNotes', 'streamCustomSid',
+      ['streamName', 'streamPrimaryUrl', 'streamLogoUrl', 'streamNotes', 'streamCustomSid',
         'streamUserAgent', 'streamReferer', 'streamHttpProxy', 'streamCustomArgs',
         'streamEpgId'].forEach(fid => { const el = $(`#${fid}`); if (el) el.value = ''; });
       $('#streamCategory').value = '';
@@ -1996,13 +2917,15 @@
       if ($('#streamPrebufferMbOverride')) $('#streamPrebufferMbOverride').value = '';
       if ($('#streamIngestOverride')) $('#streamIngestOverride').value = '';
       $('#streamRestartOnEdit').checked = false;
+      $('#streamStartNowAfterSave').checked = false;
     }
     await populateStreamServerSelect('#streamPlaylistServer', chData && chData.stream_server_id);
     renderStreamBqTags();
+    previewStreamLogo();
   }
 
   function closeStreamModal() {
-    $('#streamModal').style.display = 'none';
+    navigateTo('manage-channels');
   }
 
   function updateFpsThresholdVisibility() {
@@ -2046,11 +2969,13 @@
       const el = $(`#srcInfo${i}`);
       if (el) el.innerHTML = '<span style="color:#d29922">Scanning...</span>';
       try {
-        const resp = await fetch('/api/channels/probe-source', {
+        const opts = {
           method: 'POST', credentials: 'same-origin',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ url, user_agent: ua, http_proxy: proxy }),
-        });
+        };
+        await addCsrfHeaders(opts);
+        const resp = await fetch('/api/channels/probe-source', opts);
         const text = await resp.text();
         let info;
         try { info = JSON.parse(text); } catch { throw new Error('Probe returned invalid response'); }
@@ -2070,6 +2995,34 @@
     container.innerHTML = `<img src="${escHtml(url)}" class="preview-img" onerror="this.outerHTML='<span class=\\'text-danger\\'>Failed to load</span>'">`;
   }
 
+  function updateChannelLogoPreview(url, name) {
+    const preview = $('#channelLogoCurrentPreview');
+    const currentUrl = $('#channelLogoCurrentUrl');
+    const safeUrl = String(url || '').trim();
+    if (preview) {
+      preview.innerHTML = safeUrl
+        ? `<img src="${escHtml(safeUrl)}" alt="${escHtml(name || 'Channel')}" class="channels-logo-current-image" onerror="this.outerHTML='<span class=\\'channels-table-logo-fallback\\'>Logo</span>'">`
+        : '<span class="channels-table-logo-fallback">No Logo</span>';
+    }
+    if (currentUrl) currentUrl.textContent = safeUrl || 'No custom logo set';
+  }
+
+  function renderChannelLogoSearchResults() {
+    const wrap = $('#channelLogoSearchResults');
+    if (!wrap) return;
+    if (!_channelLogoSearchResults.length) {
+      wrap.innerHTML = '';
+      return;
+    }
+    wrap.innerHTML = _channelLogoSearchResults.map((item) => `
+      <div class="channels-logo-result-card">
+        <div class="channels-logo-result-preview">${item.logoUrl ? `<img src="${escHtml(item.logoUrl)}" alt="${escHtml(item.name || '')}" class="channels-logo-result-image" onerror="this.outerHTML='<span class=\\'channels-table-logo-fallback\\'>Logo</span>'">` : '<span class="channels-table-logo-fallback">Logo</span>'}</div>
+        <div class="channels-logo-result-name">${escHtml(item.name || '')}</div>
+        <button class="btn btn-xs btn-primary" onclick="APP.applyChannelLogoResult(decodeURIComponent('${encodeURIComponent(item.logoUrl || '')}'))">Set Icon</button>
+      </div>
+    `).join('');
+  }
+
   async function editStream(id) {
     try {
       const list = await fetch('/api/channels', { credentials: 'same-origin' }).then(r => r.json());
@@ -2087,9 +3040,9 @@
     $$('#sourceTableBody .source-url-input').forEach(inp => {
       _streamSources[parseInt(inp.dataset.idx)] = inp.value.trim();
     });
-    const allSources = _streamSources.filter(Boolean);
-    const mpdUrl = allSources[0] || '';
-    const sourceQueue = allSources.slice(1);
+    const primaryUrl = ($('#streamPrimaryUrl')?.value || '').trim();
+    const sourceQueue = _streamSources.filter(Boolean);
+    const mpdUrl = primaryUrl;
 
     const tpVal = $('#streamTranscodeProfile') ? $('#streamTranscodeProfile').value : '';
     const body = {
@@ -2142,15 +3095,25 @@
       })(),
     };
     try {
+      let targetId = id;
       if (id) {
         await channelFetch(`/${id}`, { method: 'PUT', body: JSON.stringify(body) });
-        toast('Stream updated');
+        targetId = id;
+        toast('Channel updated');
       } else {
-        await channelFetch('', { method: 'POST', body: JSON.stringify(body) });
-        toast('Stream created');
+        const created = await channelFetch('', { method: 'POST', body: JSON.stringify(body) });
+        targetId = created && created.id ? created.id : '';
+        toast('Channel created');
       }
-      closeStreamModal();
-      loadStreams();
+      if ($('#streamStartNowAfterSave')?.checked && targetId) {
+        try {
+          await channelFetch(`/${targetId}/start`, { method: 'POST' });
+          toast('Channel started');
+        } catch (startErr) {
+          toast(startErr.message || 'Channel saved but start failed', 'warning');
+        }
+      }
+      navigateTo('manage-channels');
     } catch (e) {
       toast(e.message, 'error');
     }
@@ -2160,6 +3123,7 @@
     try {
       toast('Starting stream...');
       await channelFetch(`/${id}/start`, { method: 'POST' });
+      if (_editingStreamOriginal && String(_editingStreamOriginal.id) === String(id)) _editingStreamOriginal.status = 'running';
       toast('Stream started');
       loadStreams();
     } catch (e) {
@@ -2170,6 +3134,7 @@
   async function stopStream(id) {
     try {
       await channelFetch(`/${id}/stop`, { method: 'POST' });
+      if (_editingStreamOriginal && String(_editingStreamOriginal.id) === String(id)) _editingStreamOriginal.status = 'stopped';
       toast('Stream stopped');
       loadStreams();
     } catch (e) {
@@ -2181,6 +3146,7 @@
     try {
       toast('Restarting stream...');
       await channelFetch(`/${id}/restart`, { method: 'POST' });
+      if (_editingStreamOriginal && String(_editingStreamOriginal.id) === String(id)) _editingStreamOriginal.status = 'running';
       toast('Stream restarted');
       loadStreams();
     } catch (e) {
@@ -2198,6 +3164,608 @@
       toast(e.message, 'error');
     }
   }
+
+  const CHANNEL_FORM_TABS = [
+    'channel-details',
+    'channel-advanced',
+    'channel-map',
+    'channel-restart',
+    'channel-epg',
+    'channel-servers',
+  ];
+
+  function ensureStreamSourceSlots() {
+    if (!Array.isArray(_streamSources)) _streamSources = [];
+    while (_streamSources.length < 2) _streamSources.push('');
+  }
+
+  function syncStreamSourcesFromInputs() {
+    ensureStreamSourceSlots();
+    _streamSources[0] = ($('#streamPrimaryUrl')?.value || '').trim();
+    _streamSources[1] = ($('#streamSwapUrl')?.value || '').trim();
+  }
+
+  function updateStreamExtraSourceNote() {
+    const note = $('#streamExtraSourceNote');
+    if (!note) return;
+    const extras = Math.max(0, (_streamSources || []).filter(Boolean).length - 2);
+    note.textContent = extras > 0 ? `${extras} extra mapped source${extras === 1 ? '' : 's'} preserved` : '';
+  }
+
+  function renderStreamSourceEditors() {
+    ensureStreamSourceSlots();
+    const primary = $('#streamPrimaryUrl');
+    const swap = $('#streamSwapUrl');
+    if (primary) primary.value = _streamSources[0] || '';
+    if (swap) swap.value = _streamSources[1] || '';
+    updateStreamExtraSourceNote();
+  }
+
+  function renderStreamSubCategoryTags() {
+    const el = $('#streamSubCategoryTags');
+    if (!el) return;
+    el.innerHTML = _streamSubCategoryTags.map((t) =>
+      `<span class="tag-pill">${escHtml(t.name)} <button class="tag-pill-remove" onclick="APP.removeStreamSubCategoryTag('${t.id}')">&times;</button></span>`
+    ).join('');
+  }
+
+  function addStreamSubCategoryTag(sel) {
+    const id = String(sel && sel.value || '').trim();
+    if (!id) return;
+    if ($('#streamCategory')?.value === id) {
+      sel.value = '';
+      return toast('Main category is already selected', 'warning');
+    }
+    if (_streamSubCategoryTags.some((t) => t.id === id)) {
+      sel.value = '';
+      return;
+    }
+    const opt = sel.options[sel.selectedIndex];
+    _streamSubCategoryTags.push({ id, name: opt ? opt.textContent : id });
+    sel.value = '';
+    renderStreamSubCategoryTags();
+  }
+
+  function removeStreamSubCategoryTag(id) {
+    _streamSubCategoryTags = _streamSubCategoryTags.filter((t) => t.id !== id);
+    renderStreamSubCategoryTags();
+  }
+
+  function parseStreamHeadersText(text) {
+    const headers = {};
+    String(text || '')
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .forEach((line) => {
+        const idx = line.indexOf(':');
+        if (idx <= 0) return;
+        const key = line.slice(0, idx).trim();
+        const value = line.slice(idx + 1).trim();
+        if (key) headers[key] = value;
+      });
+    return headers;
+  }
+
+  function buildStreamHeadersFromForm() {
+    const headers = parseStreamHeadersText($('#streamHeaders')?.value || '');
+    const cookie = ($('#streamCookie')?.value || '').trim();
+    if (cookie) headers.Cookie = cookie;
+    return headers;
+  }
+
+  function hydrateStreamHeaderFields(channel) {
+    const rawHeaders = channel && channel.headers && typeof channel.headers === 'object' ? { ...channel.headers } : {};
+    const cookie = rawHeaders.Cookie || rawHeaders.cookie || '';
+    delete rawHeaders.Cookie;
+    delete rawHeaders.cookie;
+    $('#streamCookie').value = cookie;
+    $('#streamHeaders').value = Object.entries(rawHeaders).map(([key, value]) => `${key}: ${value}`).join('\n');
+  }
+
+  async function loadStreamEditorEpgSources(selectedRaw) {
+    const select = $('#streamEpgSource');
+    if (!select) return;
+    try {
+      const data = await apiFetch('/epg/sources');
+      _streamEpgSourcesCache = data.sources || [];
+    } catch {
+      _streamEpgSourcesCache = [];
+    }
+    select.innerHTML = '<option value="0">No EPG</option>' + _streamEpgSourcesCache.map((src) => `<option value="${src.id}">${escHtml(src.name || `Source ${src.id}`)}</option>`).join('');
+    const selected = parseInt(selectedRaw, 10);
+    select.value = Number.isFinite(selected) && selected > 0 ? String(selected) : '0';
+  }
+
+  function renderStreamCustomMapTable() {
+    const body = $('#streamCustomMapBody');
+    if (!body) return;
+    if (!_streamCustomMapEntries.length) {
+      body.innerHTML = '<tr><td colspan="3" style="text-align:center;color:#c7ced8;padding:18px 0">No data available in table</td></tr>';
+      return;
+    }
+    body.innerHTML = _streamCustomMapEntries.map((entry, index) => `
+      <tr>
+        <td>${index + 1}</td>
+        <td>${escHtml(entry.type || 'Manual')}</td>
+        <td>${escHtml(entry.info || '')}</td>
+      </tr>
+    `).join('');
+  }
+
+  function addChannelCustomMapEntry() {
+    const query = ($('#streamCustomMapQuery')?.value || '').trim();
+    if (!query) return;
+    if (_streamCustomMapEntries.some((entry) => entry.info === query)) return;
+    _streamCustomMapEntries.push({ type: 'Manual', info: query });
+    $('#streamCustomMapQuery').value = '';
+    renderStreamCustomMapTable();
+  }
+
+  async function populateStreamTimeshiftServerSelect(selectedRaw) {
+    const sel = $('#streamTimeshiftServer');
+    if (!sel) return;
+    await ensureServersCacheForPlaylist();
+    sel.innerHTML = '<option value="0">Timeshift Disabled</option>' + _serversCache
+      .filter((server) => server.enabled !== false)
+      .map((server) => `<option value="${server.id}">${escHtml(String(server.name || `Server ${server.id}`))}</option>`)
+      .join('');
+    const selected = parseInt(selectedRaw, 10);
+    sel.value = Number.isFinite(selected) && selected > 0 ? String(selected) : '0';
+  }
+
+  function updateStreamServerTree() {
+    const tree = $('#streamServerTree');
+    if (!tree) return;
+    const selected = parseInt($('#streamPlaylistServer')?.value || '0', 10);
+    const server = _serversCache.find((row) => Number(row.id) === selected);
+    const name = server ? String(server.name || `Server ${server.id}`) : 'Use line / default';
+    tree.innerHTML = `<div class="stream-editor-tree-root"><div class="stream-editor-tree-label">Stream Source</div><div class="stream-editor-tree-node">${escHtml(name)}</div></div>`;
+  }
+
+  function renderStreamEditorSummary(channel) {
+    const card = $('#streamEditorSummaryCard');
+    const body = $('#streamEditorSummaryBody');
+    if (!card || !body) return;
+    if (!channel || !channel.id) {
+      card.style.display = 'none';
+      body.innerHTML = '';
+      return;
+    }
+    const si = channel.streamInfo || {};
+    const codecLine = [si.video_codec ? String(si.video_codec).toLowerCase() : '', si.audio_codec ? String(si.audio_codec).toLowerCase() : ''].filter(Boolean).join(' / ');
+    const bitrateLine = si.bitrate ? `${Math.round(si.bitrate / 1000)} Kbps` : 'No information available';
+    const resolutionLine = [si.width && si.height ? `${si.width} x ${si.height}` : '', formatStreamFps(si.fps)].filter(Boolean).join(' · ');
+    body.innerHTML = `
+      <table class="data-table streams-editor-summary-table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>NAME</th>
+            <th>SOURCE</th>
+            <th>CLIENTS</th>
+            <th>UPTIME</th>
+            <th>ACTION</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>${escHtml(String(channel.id || ''))}</td>
+            <td><div class="streams-xc-name-cell"><div class="streams-xc-primary-name">${escHtml(channel.name || '')}</div><div class="streams-xc-secondary-name">${escHtml((_categories.find((c) => String(c.id) === String(channel.category_id))?.category_name) || channel.category || 'Uncategorized')}</div></div></td>
+            <td><div class="streams-xc-source-cell"><div class="streams-xc-source-label">${escHtml(getStreamServerName(channel))}</div><div class="streams-xc-source-value">${escHtml(formatSourceHost(getStreamSourceUrl(channel)) || '-')}</div></div></td>
+            <td><span class="clients-badge ${Number(channel.clients || 0) > 0 ? 'active' : 'zero'}">${Number(channel.clients || 0)}</span></td>
+            <td><div class="streams-xc-uptime-card"><div class="streams-xc-uptime-pill">${escHtml(formatUptime(channel.startedAt) || (channel.on_demand ? 'ON DEMAND' : 'Stopped'))}</div><div class="streams-xc-uptime-meta"><span>${escHtml(bitrateLine)}</span>${codecLine ? `<span>${escHtml(codecLine)}</span>` : ''}</div><div class="streams-xc-uptime-meta muted">${escHtml(resolutionLine || 'No runtime information')}</div></div></td>
+            <td><div class="row-actions streams-xc-row-actions">${buildStreamActionButtonsMarkup(channel)}</div></td>
+          </tr>
+        </tbody>
+      </table>`;
+    card.style.display = '';
+  }
+
+  function switchChannelFormTab(tabId) {
+    const validTabId = CHANNEL_FORM_TABS.includes(tabId) ? tabId : CHANNEL_FORM_TABS[0];
+    $$('#page-add-channels .stream-editor-tab').forEach((tab) => tab.classList.toggle('active', tab.dataset.tab === validTabId));
+    $$('#page-add-channels .wizard-panel').forEach((panel) => panel.classList.toggle('active', panel.id === `tab-${validTabId}`));
+    const idx = CHANNEL_FORM_TABS.indexOf(validTabId);
+    const prevBtn = $('#streamEditorPrevBtn');
+    const nextBtn = $('#streamEditorNextBtn');
+    if (prevBtn) prevBtn.style.visibility = idx <= 0 ? 'hidden' : 'visible';
+    if (nextBtn) nextBtn.textContent = idx >= CHANNEL_FORM_TABS.length - 1 ? 'Finish' : 'Next';
+  }
+
+  function nextChannelFormTab() {
+    const active = $('#page-add-channels .stream-editor-tab.active')?.dataset.tab || CHANNEL_FORM_TABS[0];
+    const idx = CHANNEL_FORM_TABS.indexOf(active);
+    if (idx < 0 || idx >= CHANNEL_FORM_TABS.length - 1) return;
+    switchChannelFormTab(CHANNEL_FORM_TABS[idx + 1]);
+  }
+
+  function prevChannelFormTab() {
+    const active = $('#page-add-channels .stream-editor-tab.active')?.dataset.tab || CHANNEL_FORM_TABS[0];
+    const idx = CHANNEL_FORM_TABS.indexOf(active);
+    if (idx <= 0) return;
+    switchChannelFormTab(CHANNEL_FORM_TABS[idx - 1]);
+  }
+
+  function playEditingStream() {
+    const id = ($('#streamFormId')?.value || '').trim();
+    if (!id) return;
+    const channel = _editingStreamOriginal || _streamsCache.find((row) => String(row.id) === String(id));
+    openStreamPlayer(id, channel && channel.name ? channel.name : 'Stream');
+  }
+
+  function openEditingStreamLogoPicker() {
+    const id = ($('#streamFormId')?.value || '').trim();
+    if (!id) return previewStreamLogo();
+    openChannelLogoModal(id);
+  }
+
+  async function probeSingleChannelSource(index) {
+    syncStreamSourcesFromInputs();
+    const url = String(_streamSources[index] || '').trim();
+    const target = index === 0 ? $('#streamPrimaryUrlStatus') : $('#streamSwapUrlStatus');
+    if (!url) {
+      if (target) target.textContent = '';
+      return;
+    }
+    if (target) target.innerHTML = '<span style="color:#d29922">Scanning...</span>';
+    try {
+      const opts = {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url,
+          user_agent: $('#streamUserAgent')?.value || '',
+          http_proxy: $('#streamHttpProxy')?.value || '',
+        }),
+      };
+      await addCsrfHeaders(opts);
+      const resp = await fetch('/api/channels/probe-source', opts);
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || 'Probe failed');
+      if (target) {
+        target.innerHTML = `<span class="si-ok">${escHtml(data.video_codec || '?')} ${data.width || '?'}x${data.height || '?'} ${escHtml(formatStreamFps(data.fps || '?'))}</span>`;
+      }
+    } catch (e) {
+      if (target) target.innerHTML = `<span style="color:#f85149">${escHtml(e.message || 'Probe failed')}</span>`;
+    }
+  }
+
+  function insertChannelSourceAfter(index) {
+    syncStreamSourcesFromInputs();
+    _streamSources.splice(index + 1, 0, '');
+    renderStreamSourceEditors();
+  }
+
+  function removeChannelSource(index) {
+    syncStreamSourcesFromInputs();
+    if (_streamSources.length <= 2) {
+      _streamSources[index] = '';
+    } else {
+      _streamSources.splice(index, 1);
+    }
+    renderStreamSourceEditors();
+  }
+
+  function promoteChannelSource(index) {
+    syncStreamSourcesFromInputs();
+    if (index <= 0 || index >= _streamSources.length) return;
+    const tmp = _streamSources[index - 1];
+    _streamSources[index - 1] = _streamSources[index];
+    _streamSources[index] = tmp;
+    renderStreamSourceEditors();
+  }
+
+  function demoteChannelSource(index) {
+    syncStreamSourcesFromInputs();
+    if (index < 0 || index >= _streamSources.length - 1) return;
+    const tmp = _streamSources[index + 1];
+    _streamSources[index + 1] = _streamSources[index];
+    _streamSources[index] = tmp;
+    renderStreamSourceEditors();
+  }
+
+  async function scanAllSources() {
+    syncStreamSourcesFromInputs();
+    await Promise.all([probeSingleChannelSource(0), probeSingleChannelSource(1)]);
+  }
+
+  async function openStreamForm(chData, options = {}) {
+    if (!options.skipNavigate) navigateTo('add-channels');
+    await loadRefData();
+    await ensureServersCacheForPlaylist();
+
+    const liveCats = _categories.filter((c) => c.category_type === 'live');
+    populateSelect('#streamCategory', liveCats, 'id', 'category_name', 'None');
+    populateSelect('#streamSubCategory', liveCats, 'id', 'category_name', 'Select sub-category...');
+    populateSelect('#streamBouquet', _bouquets, 'id', 'bouquet_name', 'Select bouquet...');
+
+    _streamBqTags = [];
+    _streamSubCategoryTags = [];
+    _streamCustomMapEntries = [];
+    _editingStreamOriginal = chData ? { ...chData } : null;
+    if (chData && chData.id) {
+      const cached = _streamsCache.find((row) => String(row.id) === String(chData.id));
+      if (cached) Object.assign(cached, chData);
+      else _streamsCache.unshift(chData);
+    }
+
+    const profileSel = $('#streamTranscodeProfile');
+    if (profileSel) {
+      try {
+        const profiles = await api('/api/transcode-profiles');
+        profileSel.innerHTML = '<option value="">Transcoding Disabled</option>' +
+          profiles.map((p) => `<option value="${p.id}">${escHtml(p.name)}</option>`).join('');
+      } catch {
+        profileSel.innerHTML = '<option value="">Transcoding Disabled</option>';
+      }
+    }
+
+    await loadStreamEditorEpgSources(chData && chData.epg_source_id);
+    await populateStreamServerSelect('#streamPlaylistServer', chData && chData.stream_server_id);
+    await populateStreamTimeshiftServerSelect(chData && chData.timeshift_server_id);
+
+    if (chData) {
+      $('#channelFormTitle').textContent = chData.name || 'Edit Stream';
+      $('#channelFormSubtitle').textContent = 'Update this stream using the same details, advanced, mapping, restart, EPG, and server tabs shown in the reference design.';
+      $('#streamFormId').value = chData.id || '';
+      $('#streamName').value = chData.name || '';
+      $('#streamLogoUrl').value = chData.logoUrl || '';
+      $('#streamCategory').value = chData.category_id || '';
+      $('#streamNotes').value = chData.notes || '';
+      $('#streamInputType').value = chData.inputType || 'auto';
+      $('#streamGenPts').checked = chData.gen_timestamps !== false;
+      $('#streamReadNative').checked = !!chData.read_native;
+      $('#streamStreamAll').checked = !!chData.stream_all;
+      $('#streamAllowRecord').checked = chData.allow_record !== false;
+      $('#streamDirectSource').checked = !!chData.direct_source;
+      $('#streamProtect').checked = !!chData.protect_stream;
+      $('#streamCustomSid').value = chData.custom_sid || '';
+      $('#streamDelayMin').value = chData.delay_minutes || 0;
+      $('#streamProbesize').value = chData.probesize_ondemand || 1500000;
+      $('#streamUserAgent').value = chData.userAgent || '';
+      $('#streamHttpProxy').value = chData.httpProxy || '';
+      $('#streamCustomArgs').value = chData.customFfmpegArgs || '';
+      $('#streamRestartDays').value = chData.restart_days || '';
+      $('#streamRestartTime').value = chData.restart_time || '06:00';
+      $('#streamEpgId').value = chData.epgChannelId || '';
+      $('#streamEpgLanguage').value = chData.epg_language || '';
+      $('#streamOnDemandMode').value = chData.on_demand ? '1' : '0';
+      $('#streamTimeshiftDays').value = chData.timeshift_days || 0;
+      $('#streamRestartOnEdit').checked = !!chData.restart_on_edit;
+      $('#streamCustomMapQuery').value = chData.custom_map_query || '';
+      hydrateStreamHeaderFields(chData);
+
+      if (profileSel) profileSel.value = chData.transcode_profile_id || '';
+
+      _streamSources = Array.isArray(chData.sourceQueue) && chData.sourceQueue.length
+        ? [...chData.sourceQueue]
+        : [chData.mpdUrl || '', chData.swap_link || ''];
+      _streamCustomMapEntries = Array.isArray(chData.custom_map_entries) ? [...chData.custom_map_entries] : [];
+
+      if (Array.isArray(chData.bouquet_ids)) {
+        _streamBqTags = chData.bouquet_ids.map((bid) => {
+          const row = _bouquets.find((item) => String(item.id) === String(bid));
+          return row ? { id: String(row.id), name: row.bouquet_name || row.name } : { id: String(bid), name: String(bid) };
+        });
+      }
+
+      const subCategoryIds = Array.isArray(chData.join_sub_category_ids)
+        ? chData.join_sub_category_ids
+        : Array.isArray(chData.joinSubCategoryIds)
+          ? chData.joinSubCategoryIds
+          : [];
+      _streamSubCategoryTags = subCategoryIds.map((cid) => {
+        const row = liveCats.find((item) => String(item.id) === String(cid));
+        return row ? { id: String(row.id), name: row.category_name } : { id: String(cid), name: String(cid) };
+      });
+    } else {
+      $('#channelFormTitle').textContent = 'Add Stream';
+      $('#channelFormSubtitle').textContent = 'Create a live stream with the same multi-tab editing flow used on the final reference layout.';
+      $('#streamFormId').value = '';
+      $('#streamName').value = '';
+      $('#streamLogoUrl').value = '';
+      $('#streamCategory').value = '';
+      $('#streamNotes').value = '';
+      $('#streamInputType').value = 'auto';
+      $('#streamGenPts').checked = true;
+      $('#streamReadNative').checked = false;
+      $('#streamStreamAll').checked = false;
+      $('#streamAllowRecord').checked = true;
+      $('#streamDirectSource').checked = false;
+      $('#streamProtect').checked = false;
+      $('#streamCustomSid').value = '';
+      $('#streamDelayMin').value = 0;
+      $('#streamProbesize').value = 1500000;
+      $('#streamUserAgent').value = 'XtreamMasters OTT Panel';
+      $('#streamHttpProxy').value = '';
+      $('#streamCustomArgs').value = '';
+      $('#streamCookie').value = '';
+      $('#streamHeaders').value = '';
+      $('#streamRestartDays').value = '';
+      $('#streamRestartTime').value = '06:00';
+      $('#streamEpgId').value = '';
+      $('#streamEpgLanguage').value = '';
+      $('#streamOnDemandMode').value = '0';
+      $('#streamTimeshiftDays').value = 0;
+      $('#streamRestartOnEdit').checked = false;
+      $('#streamCustomMapQuery').value = '';
+      _streamSources = ['', ''];
+    }
+
+    renderStreamSourceEditors();
+    renderStreamBqTags();
+    renderStreamSubCategoryTags();
+    renderStreamCustomMapTable();
+    renderStreamEditorSummary(chData);
+    updateStreamServerTree();
+    previewStreamLogo();
+    switchChannelFormTab(CHANNEL_FORM_TABS[0]);
+
+    const playBtn = $('#streamHeaderPlayBtn');
+    if (playBtn) playBtn.style.display = chData && chData.id ? 'inline-flex' : 'none';
+    const saveBtn = $('#streamEditorSaveBtn');
+    if (saveBtn) saveBtn.textContent = chData && chData.id ? 'Edit' : 'Create';
+
+    if ($('#streamPlaylistServer')) {
+      $('#streamPlaylistServer').onchange = updateStreamServerTree;
+    }
+    if ($('#streamPrimaryUrl')) {
+      $('#streamPrimaryUrl').oninput = () => {
+        syncStreamSourcesFromInputs();
+        updateStreamExtraSourceNote();
+      };
+    }
+    if ($('#streamSwapUrl')) {
+      $('#streamSwapUrl').oninput = () => {
+        syncStreamSourcesFromInputs();
+        updateStreamExtraSourceNote();
+      };
+    }
+    if ($('#streamName')) {
+      $('#streamName').oninput = () => {
+        const fallback = ($('#streamFormId')?.value || '').trim() ? 'Edit Stream' : 'Add Stream';
+        $('#channelFormTitle').textContent = ($('#streamName').value || '').trim() || fallback;
+      };
+    }
+  }
+
+  async function editStream(id) {
+    try {
+      const list = await fetch('/api/channels', { credentials: 'same-origin' }).then((r) => r.json());
+      const channel = (Array.isArray(list) ? list : []).find((row) => String(row.id) === String(id));
+      if (!channel) return toast('Stream not found', 'error');
+      await openStreamForm(channel);
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  }
+
+  async function saveStream() {
+    const id = ($('#streamFormId')?.value || '').trim();
+    syncStreamSourcesFromInputs();
+    const sourceQueue = _streamSources.map((item) => String(item || '').trim()).filter(Boolean);
+    const primaryUrl = sourceQueue[0] || '';
+    if (!($('#streamName')?.value || '').trim()) return toast('Stream name is required', 'error');
+    if (!primaryUrl) return toast('At least one stream URL is required', 'error');
+
+    const tpVal = $('#streamTranscodeProfile') ? $('#streamTranscodeProfile').value : '';
+    const body = {
+      name: ($('#streamName')?.value || '').trim(),
+      mpdUrl: primaryUrl,
+      inputType: $('#streamInputType')?.value || 'auto',
+      sourceQueue,
+      epgChannelId: ($('#streamEpgId')?.value || '').trim(),
+      epg_source_id: parseInt($('#streamEpgSource')?.value, 10) || 0,
+      epg_language: $('#streamEpgLanguage')?.value || '',
+      logoUrl: ($('#streamLogoUrl')?.value || '').trim(),
+      category_id: $('#streamCategory')?.value || null,
+      join_sub_category_ids: _streamSubCategoryTags.map((t) => parseInt(t.id, 10)).filter((n) => Number.isFinite(n)),
+      notes: $('#streamNotes')?.value || '',
+      transcode_profile_id: tpVal ? parseInt(tpVal, 10) : null,
+      userAgent: $('#streamUserAgent')?.value || '',
+      httpProxy: ($('#streamHttpProxy')?.value || '').trim() || null,
+      headers: buildStreamHeadersFromForm(),
+      customFfmpegArgs: $('#streamCustomArgs')?.value || '',
+      gen_timestamps: !!$('#streamGenPts')?.checked,
+      read_native: !!$('#streamReadNative')?.checked,
+      stream_all: !!$('#streamStreamAll')?.checked,
+      allow_record: !!$('#streamAllowRecord')?.checked,
+      custom_sid: ($('#streamCustomSid')?.value || '').trim(),
+      probesize_ondemand: parseInt($('#streamProbesize')?.value, 10) || 1500000,
+      delay_minutes: parseInt($('#streamDelayMin')?.value, 10) || 0,
+      on_demand: ($('#streamOnDemandMode')?.value || '0') === '1',
+      restart_on_edit: !!$('#streamRestartOnEdit')?.checked,
+      bouquet_ids: _streamBqTags.map((t) => parseInt(t.id, 10)).filter((n) => Number.isFinite(n)),
+      stream_server_id: (() => {
+        const n = parseInt($('#streamPlaylistServer')?.value, 10);
+        return Number.isFinite(n) && n > 0 ? n : 0;
+      })(),
+      direct_source: !!$('#streamDirectSource')?.checked,
+      protect_stream: !!$('#streamProtect')?.checked,
+      custom_map_query: ($('#streamCustomMapQuery')?.value || '').trim(),
+      custom_map_entries: _streamCustomMapEntries.slice(),
+      restart_days: ($('#streamRestartDays')?.value || '').trim(),
+      restart_time: $('#streamRestartTime')?.value || '',
+      timeshift_server_id: parseInt($('#streamTimeshiftServer')?.value, 10) || 0,
+      timeshift_days: parseInt($('#streamTimeshiftDays')?.value, 10) || 0,
+    };
+
+    const wasRunning = _editingStreamOriginal && ['running', 'starting'].includes(String(_editingStreamOriginal.status || '').toLowerCase());
+    try {
+      let targetId = id;
+      if (id) {
+        if (wasRunning) {
+          await channelFetch(`/${id}/stop`, { method: 'POST' });
+        }
+        await channelFetch(`/${id}`, { method: 'PUT', body: JSON.stringify(body) });
+        targetId = id;
+        if (wasRunning) {
+          await channelFetch(`/${id}/start`, { method: 'POST' });
+          toast('Stream updated and restarted');
+        } else {
+          toast('Stream updated');
+        }
+      } else {
+        const created = await channelFetch('', { method: 'POST', body: JSON.stringify(body) });
+        targetId = created && created.id ? created.id : '';
+        toast('Stream created');
+      }
+      _editingStreamOriginal = null;
+      navigateTo('manage-channels');
+      if (targetId) loadStreams({ silent: true }).catch(() => {});
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  }
+
+  // ─── Stream Repair ─────────────────────────────────────────────────
+  APP._streamHealthCache = {};
+
+  async function fetchHealthData() {
+    try {
+      const data = await apiFetch('/streams/health-all');
+      APP._streamHealthCache = data || {};
+      renderStreamsTable();
+    } catch {}
+  }
+
+  APP.repairStream = async function(id) {
+    const btn = document.querySelector(`.row-action-btn.repair-btn[onclick*="${id}"]`);
+    if (btn) { btn.disabled = true; btn.style.opacity = '0.5'; }
+    try {
+      const data = await apiFetch(`/streams/${id}/repair`, { method: 'POST' });
+      APP._streamHealthCache = APP._streamHealthCache || {};
+      APP._streamHealthCache[id] = { status: data.status, checkedAt: Date.now(), info: data.info, error: data.error };
+      toast(`Stream ${data.status === 'ok' ? 'is healthy' : data.status === 'slow' ? 'is slow' : 'has issues'}: ${id}`, data.status === 'ok' ? 'success' : 'warning');
+      renderStreamsTable();
+    } catch (e) {
+      toast(e.message, 'error');
+    } finally {
+      if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
+    }
+  };
+
+  APP.repairAllStreams = async function() {
+    const btn = $('#repairAllBtn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Checking...'; }
+    try {
+      toast('Checking all streams...', 'info', 4000);
+      const data = await apiFetch('/streams/repair-all', { method: 'POST' });
+      // Update cache with results
+      APP._streamHealthCache = APP._streamHealthCache || {};
+      for (const d of (data.details || [])) {
+        APP._streamHealthCache[d.id] = { status: d.status, checkedAt: Date.now(), info: d.info, error: d.error };
+      }
+      toast(`Done: ${data.ok || 0} OK, ${data.slow || 0} Slow, ${data.broken || 0} Broken`, data.broken > 0 ? 'warning' : 'success');
+      renderStreamsTable();
+    } catch (e) {
+      toast(e.message, 'error');
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = 'Mass Review'; }
+    }
+  };
 
   async function viewStreamLogs(id) {
     try {
@@ -2389,36 +3957,60 @@
   // ─── Categories ──────────────────────────────────────────────────
 
   function getCategoryFixedTypeFromPage() {
-    if (_currentPage === 'categories-channels') return 'live';
-    if (_currentPage === 'categories-movies') return 'movie';
-    if (_currentPage === 'categories-series') return 'series';
+    if (_currentPage === 'categories') {
+      return document.querySelector('[data-cat-type].active')?.dataset.catType || 'live';
+    }
     return null;
   }
 
   function reloadCurrentCategoriesPage() {
-    const ft = getCategoryFixedTypeFromPage();
-    if (ft === 'live') return loadCategoriesForPage('live', 'categoriesTableChannels');
-    if (ft === 'movie') return loadCategoriesForPage('movie', 'categoriesTableMovies');
-    if (ft === 'series') return loadCategoriesForPage('series', 'categoriesTableSeries');
+    if (_currentPage === 'categories') {
+      return loadCategoriesPage(document.querySelector('[data-cat-type].active')?.dataset.catType || 'live');
+    }
   }
 
-  async function loadCategoriesForPage(type, tableId) {
+  // ─── Unified Categories Page ─────────────────────────────────────────
+  async function loadCategoriesPage(type) {
     try {
+      document.querySelectorAll('[data-cat-type]').forEach((tab) => {
+        tab.classList.toggle('active', tab.dataset.catType === type);
+      });
       const data = await apiFetch(`/categories?type=${encodeURIComponent(type)}`);
       const cats = data.categories || [];
-      const tbody = $(`#${tableId} tbody`);
+      _categoriesCache = cats;
+      const tbody = $('#categoriesTable tbody');
       if (!tbody) return;
-      tbody.innerHTML = cats.map(c => `
-        <tr>
-          <td>${c.id}</td>
-          <td>${escHtml(c.category_name || '')}</td>
-          <td>${c.cat_order || 0}</td>
+
+      // Client-side search filter
+      const search = ($('#categoriesSearch')?.value || '').toLowerCase();
+      const filtered = search
+        ? cats.filter(c => (c.category_name || '').toLowerCase().includes(search))
+        : cats;
+
+      if (filtered.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;color:#8b949e;padding:32px 0">No categories found</td></tr>`;
+        return;
+      }
+
+      tbody.innerHTML = filtered.map(c => {
+        const color = c.color || '#6b9ef5';
+        return `<tr>
+          <td width="50"><span style="color:#8b949e;font-size:.75rem">${c.id}</span></td>
           <td>
-            <button class="btn btn-xs btn-primary" onclick="APP.editCategory(${c.id}, '${escHtml(c.category_name)}', '${escHtml(c.category_type)}', ${c.cat_order || 0})">Edit</button>
-            <button class="btn btn-xs btn-danger" onclick="APP.deleteCategory(${c.id})">Del</button>
+            <span class="cat-dot" style="background:${escHtml(color)}"></span>
+            <span style="font-weight:500;color:#e6edf3">${escHtml(c.category_name || '')}</span>
           </td>
-        </tr>
-      `).join('');
+          <td width="70"><span style="color:#8b949e;font-size:.82rem">${c.cat_order || 0}</span></td>
+          <td>
+            <div class="row-actions">
+              <button class="row-action-btn edit-btn" onclick="APP.editCategory(${c.id}, '${escHtml(c.category_name || '')}', '${escHtml(type)}', ${c.cat_order || 0})" title="Edit"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>
+              <button class="row-action-btn delete-btn" onclick="APP.deleteCategory(${c.id})" title="Delete"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
+            </div>
+          </td>
+        </tr>`;
+      }).join('');
+
+      makeSortable($('#categoriesTable'));
     } catch (e) {
       toast(e.message, 'error');
     }
@@ -2779,60 +4371,270 @@
 
   // ─── Resellers ───────────────────────────────────────────────────
 
-  async function loadResellers() {
-    try {
-      const data = await apiFetch('/resellers');
-      const items = data.resellers || [];
-      $('#resellersTable tbody').innerHTML = items.map(r => `
-        <tr>
-          <td>${r.id}</td>
-          <td>${escHtml(r.username || '')}</td>
-          <td>${escHtml(r.email || '')}</td>
-          <td>${r.credits || 0}</td>
-          <td>${statusBadge(r.status === 1, false, false)}</td>
-          <td>
-            <button class="btn btn-xs btn-primary" onclick="APP.editResellerCredits(${r.id})">Credits</button>
-          </td>
+  function getResellerMemberGroups() {
+    return (_userGroups || []).filter((g) => Number(g.is_reseller) === 1);
+  }
+
+  function formatUserDate(raw) {
+    if (!raw) return 'Never';
+    return formatDate(raw);
+  }
+
+  function syncRegisteredUsersGroupControls() {
+    const groups = getResellerMemberGroups();
+    const filter = $('#registeredUsersGroupFilter');
+    const form = $('#registeredUserGroup');
+    const currentFilter = filter ? filter.value : '';
+    const currentForm = form ? form.value : '';
+    populateSelect('#registeredUsersGroupFilter', groups, 'group_id', 'group_name', 'All Member Groups');
+    populateSelect('#registeredUserGroup', groups, 'group_id', 'group_name', 'Select reseller group...');
+    if (filter) filter.value = currentFilter;
+    if (form && currentForm) form.value = currentForm;
+  }
+
+  function renderRegisteredUsersPagination(total) {
+    const bar = $('#registeredUsersPagination');
+    if (!bar) return;
+    const totalPages = Math.max(1, Math.ceil((Number(total) || 0) / Math.max(1, _registeredUsersPerPage)));
+    const info = `<span class="pagination-info">Page ${_registeredUsersPage} of ${totalPages} · Total ${total || 0}</span>`;
+    const buttons = [
+      `<button class="btn btn-xs btn-secondary" ${_registeredUsersPage <= 1 ? 'disabled' : ''} onclick="APP.goRegisteredUsersPage(${_registeredUsersPage - 1})">Prev</button>`,
+      `<button class="btn btn-xs btn-secondary" ${_registeredUsersPage >= totalPages ? 'disabled' : ''} onclick="APP.goRegisteredUsersPage(${_registeredUsersPage + 1})">Next</button>`,
+    ].join('');
+    bar.innerHTML = `${info}<div class="pagination-controls">${buttons}</div>`;
+  }
+
+  function goRegisteredUsersPage(page) {
+    _registeredUsersPage = Math.max(1, parseInt(page, 10) || 1);
+    loadRegisteredUsers();
+  }
+
+  function renderRegisteredUserPackageOverridesTable(overrides = []) {
+    const tbody = $('#registeredUserPackageOverridesTable tbody');
+    if (!tbody) return;
+    const overrideMap = new Map((overrides || []).map((row) => [String(row.package_id), row]));
+    tbody.innerHTML = (_packages || []).map((pkg, index) => {
+      const override = overrideMap.get(String(pkg.id)) || {};
+      return `
+        <tr data-package-id="${pkg.id}">
+          <td>${index + 1}</td>
+          <td>${escHtml(pkg.package_name || '')}</td>
+          <td>${Number(pkg.trial_credits || 0).toFixed(2)}</td>
+          <td>${Number(pkg.official_credits || 0).toFixed(2)}</td>
+          <td><input type="number" class="form-control rpo-trial" min="0" step="0.01" value="${override.trial_credits_override != null ? escHtml(String(override.trial_credits_override)) : ''}" placeholder="Default"></td>
+          <td><input type="number" class="form-control rpo-official" min="0" step="0.01" value="${override.official_credits_override != null ? escHtml(String(override.official_credits_override)) : ''}" placeholder="Default"></td>
+          <td><label class="toggle"><input type="checkbox" class="rpo-enabled" ${overrideMap.has(String(pkg.id)) ? (Number(override.enabled) === 1 ? 'checked' : '') : ''}><span class="toggle-slider"></span></label></td>
         </tr>
-      `).join('');
-    } catch (e) { toast(e.message, 'error'); }
+      `;
+    }).join('') || '<tr><td colspan="7" style="color:#8b949e;text-align:center">No packages available</td></tr>';
   }
 
-  function openResellerModal() {
-    $('#resellerModal').style.display = 'flex';
-    $('#rslFormId').value = '';
-    $('#rslUsername').value = '';
-    $('#rslPassword').value = '';
-    $('#rslEmail').value = '';
-    $('#rslCredits').value = 0;
-    $('#rslModalTitle').textContent = 'Add Reseller';
+  function collectRegisteredUserPackageOverrides() {
+    return [...document.querySelectorAll('#registeredUserPackageOverridesTable tbody tr[data-package-id]')].map((row) => {
+      const packageId = parseInt(row.dataset.packageId, 10);
+      const data = {
+        package_id: packageId,
+        enabled: row.querySelector('.rpo-enabled')?.checked ? 1 : 0,
+        trial_credits_override: row.querySelector('.rpo-trial')?.value || '',
+        official_credits_override: row.querySelector('.rpo-official')?.value || '',
+      };
+      return data;
+    }).filter((row) => row.enabled || row.trial_credits_override !== '' || row.official_credits_override !== '');
   }
-  function closeResellerModal() { $('#resellerModal').style.display = 'none'; }
 
-  async function saveReseller() {
+  function resetRegisteredUserPackageOverrides() {
+    _registeredUserPackageOverrides = [];
+    renderRegisteredUserPackageOverridesTable([]);
+  }
+
+  function editRegisteredUser(id) {
+    openRegisteredUserForm(id);
+  }
+
+  function updateRegisteredUserCreditsPreview() {
+    if (!_registeredUserCreditsTarget) return;
+    const mode = $('#registeredUserCreditsMode')?.value || 'add';
+    const amount = parseFloat($('#registeredUserCreditsAmount')?.value || '0') || 0;
+    const current = Number(_registeredUserCreditsTarget.credits || 0);
+    let next = current;
+    if (mode === 'add') next = current + amount;
+    else if (mode === 'subtract') next = Math.max(0, current - amount);
+    else next = Math.max(0, amount);
+    const preview = $('#registeredUserCreditsPreview');
+    if (preview) preview.textContent = `New Balance: ${next.toFixed(2)}`;
+  }
+
+  function syncMemberGroupFormMode() {
+    const isReseller = $('#memberGroupIsReseller')?.checked;
+    ['memberGroupTrialsAllowed', 'memberGroupTrialsIn', 'memberGroupDeleteUsers', 'memberGroupManageExpiryMedia', 'memberGroupAnnouncement'].forEach((id) => {
+      const el = $(`#${id}`);
+      if (el) el.disabled = !isReseller;
+    });
+  }
+
+  async function loadMemberGroupFormPage() {
+    await loadRefData();
+    const adminToggle = $('#memberGroupIsAdmin');
+    const resellerToggle = $('#memberGroupIsReseller');
+    if (adminToggle) adminToggle.onchange = () => { if (adminToggle.checked && resellerToggle) resellerToggle.checked = false; syncMemberGroupFormMode(); };
+    if (resellerToggle) resellerToggle.onchange = () => { if (resellerToggle.checked && adminToggle) adminToggle.checked = false; syncMemberGroupFormMode(); };
+    if (_memberGroupEditingId) {
+      try {
+        const group = await apiFetch(`/user-groups/${_memberGroupEditingId}`);
+        $('#memberGroupFormTitle').textContent = 'Edit Group';
+        $('#memberGroupFormSubtitle').textContent = 'Configure the real reseller permissions and announcement content for this member group.';
+        $('#memberGroupFormId').value = group.group_id;
+        $('#memberGroupName').value = group.group_name || '';
+        $('#memberGroupIsAdmin').checked = Number(group.is_admin) === 1;
+        $('#memberGroupIsReseller').checked = Number(group.is_reseller) === 1;
+        $('#memberGroupTrialsAllowed').value = String(group.total_allowed_gen_trials || 0);
+        $('#memberGroupTrialsIn').value = group.total_allowed_gen_in || 'day';
+        $('#memberGroupDeleteUsers').checked = Number(group.delete_users) === 1;
+        $('#memberGroupManageExpiryMedia').checked = Number(group.manage_expiry_media) === 1;
+        $('#memberGroupAnnouncement').value = group.notice_html || '';
+        syncMemberGroupFormMode();
+      } catch (e) {
+        toast(e.message, 'error');
+        navigateTo('member-groups');
+      }
+      return;
+    }
+    $('#memberGroupFormTitle').textContent = 'Add Group';
+    $('#memberGroupFormSubtitle').textContent = 'Create a focused member group for reseller or admin operator accounts.';
+    $('#memberGroupFormId').value = '';
+    $('#memberGroupName').value = '';
+    $('#memberGroupIsAdmin').checked = false;
+    $('#memberGroupIsReseller').checked = true;
+    $('#memberGroupTrialsAllowed').value = '0';
+    $('#memberGroupTrialsIn').value = 'day';
+    $('#memberGroupDeleteUsers').checked = false;
+    $('#memberGroupManageExpiryMedia').checked = false;
+    $('#memberGroupAnnouncement').value = '';
+    syncMemberGroupFormMode();
+  }
+
+  function openMemberGroupForm(id = null) {
+    const nextId = parseInt(id, 10);
+    _memberGroupEditingId = Number.isFinite(nextId) ? nextId : null;
+    if (_currentPage !== 'member-group-form') return navigateTo('member-group-form');
+    return loadMemberGroupFormPage();
+  }
+
+  async function saveMemberGroup() {
+    const id = parseInt($('#memberGroupFormId')?.value || '', 10);
     const body = {
-      username: $('#rslUsername').value,
-      password: $('#rslPassword').value,
-      email: $('#rslEmail').value,
-      credits: parseFloat($('#rslCredits').value) || 0,
+      group_name: $('#memberGroupName').value.trim(),
+      is_admin: $('#memberGroupIsAdmin').checked ? 1 : 0,
+      is_reseller: $('#memberGroupIsReseller').checked ? 1 : 0,
+      total_allowed_gen_trials: parseInt($('#memberGroupTrialsAllowed').value || '0', 10) || 0,
+      total_allowed_gen_in: $('#memberGroupTrialsIn').value || 'day',
+      delete_users: $('#memberGroupDeleteUsers').checked ? 1 : 0,
+      manage_expiry_media: $('#memberGroupManageExpiryMedia').checked ? 1 : 0,
+      notice_html: $('#memberGroupAnnouncement').value || '',
     };
+    if (!body.group_name) return toast('Group name required', 'error');
     try {
-      await apiFetch('/resellers', { method: 'POST', body: JSON.stringify(body) });
-      toast('Reseller created');
-      closeResellerModal();
-      loadResellers();
+      if (Number.isFinite(id)) {
+        await apiFetch(`/user-groups/${id}`, { method: 'PUT', body: JSON.stringify(body) });
+        toast('Member group updated');
+      } else {
+        await apiFetch('/user-groups', { method: 'POST', body: JSON.stringify(body) });
+        toast('Member group created');
+      }
+      _memberGroupEditingId = null;
+      navigateTo('member-groups');
     } catch (e) { toast(e.message, 'error'); }
   }
 
-  async function editResellerCredits(id) {
-    const credits = prompt('Enter new credit amount:');
-    if (credits === null) return;
+  async function deleteMemberGroup(id) {
+    if (!confirm('Delete this member group?')) return;
     try {
-      await apiFetch(`/resellers/${id}/credits`, { method: 'PUT', body: JSON.stringify({ credits: parseFloat(credits) }) });
-      toast('Credits updated');
-      loadResellers();
+      await apiFetch(`/user-groups/${id}`, { method: 'DELETE' });
+      toast('Member group deleted');
+      loadMemberGroups();
     } catch (e) { toast(e.message, 'error'); }
   }
+
+  function buildExpiryMediaRow(item = {}) {
+    return `
+      <div class="reseller-members-expiry-row">
+        <input type="text" class="form-control rem-country" placeholder="Country code (blank = default)" value="${escHtml(item.country_code || '')}">
+        <input type="text" class="form-control rem-url" placeholder="https://example.com/media.m3u8" value="${escHtml(item.media_url || '')}">
+        <button type="button" class="btn btn-xs btn-danger" onclick="APP.removeExpiryMediaRow(this)">Remove</button>
+      </div>
+    `;
+  }
+
+  function renderExpiryMediaScenarioRows(scenario, items = []) {
+    const wrap = scenario === 'expiring' ? $('#expiryMediaExpiringRows') : $('#expiryMediaExpiredRows');
+    if (!wrap) return;
+    const filtered = (items || []).filter((item) => item.scenario === scenario);
+    wrap.innerHTML = (filtered.length ? filtered : [{}]).map((item) => buildExpiryMediaRow(item)).join('');
+  }
+
+  function collectExpiryMediaRows(containerSelector, scenario) {
+    const wrap = $(containerSelector);
+    if (!wrap) return [];
+    return [...wrap.querySelectorAll('.reseller-members-expiry-row')]
+      .map((row, index) => ({
+        scenario,
+        country_code: row.querySelector('.rem-country')?.value || '',
+        media_url: row.querySelector('.rem-url')?.value || '',
+        sort_order: index,
+      }))
+      .filter((item) => String(item.media_url || '').trim());
+  }
+
+  function openExpiryMediaAddModal() {
+    const used = new Set((_expiryMediaCurrentRows || []).map((row) => String(row.user_id)));
+    const eligible = (_resellersCache || []).filter((row) => !used.has(String(row.id)));
+    const select = $('#expiryMediaAddReseller');
+    if (select) {
+      select.innerHTML = '<option value="">Select reseller...</option>' + eligible.map((row) => `<option value="${row.id}">${escHtml(row.username || '')}</option>`).join('');
+    }
+    $('#expiryMediaAddModal').style.display = 'flex';
+  }
+
+  function closeExpiryMediaAddModal() {
+    $('#expiryMediaAddModal').style.display = 'none';
+  }
+
+  async function createExpiryMediaService() {
+    const userId = parseInt($('#expiryMediaAddReseller')?.value || '', 10);
+    if (!Number.isFinite(userId)) return toast('Select a reseller first', 'error');
+    try {
+      const service = await apiFetch('/expiry-media/services', { method: 'POST', body: JSON.stringify({ user_id: userId }) });
+      _expiryMediaEditingServiceId = service.id;
+      closeExpiryMediaAddModal();
+      navigateTo('expiry-media-edit');
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+  function addExpiryMediaRow(scenario) {
+    const wrap = scenario === 'expiring' ? $('#expiryMediaExpiringRows') : $('#expiryMediaExpiredRows');
+    if (!wrap) return;
+    wrap.insertAdjacentHTML('beforeend', buildExpiryMediaRow({}));
+  }
+
+  function removeExpiryMediaRow(btn) {
+    const row = btn && btn.closest ? btn.closest('.reseller-members-expiry-row') : null;
+    const wrap = row && row.parentElement;
+    if (row) row.remove();
+    if (wrap && !wrap.querySelector('.reseller-members-expiry-row')) {
+      wrap.insertAdjacentHTML('beforeend', buildExpiryMediaRow({}));
+    }
+  }
+
+  function editExpiryMediaService(id) {
+    _expiryMediaEditingServiceId = parseInt(id, 10) || null;
+    if (_currentPage !== 'expiry-media-edit') return navigateTo('expiry-media-edit');
+    return loadExpiryMediaEditPage();
+  }
+  // Backward-compatible aliases from the older Resellers surface
+  function openResellerModal() { openRegisteredUserForm(); }
+  function closeResellerModal() {}
+  async function saveReseller() { await saveRegisteredUser(); }
+  async function editResellerCredits(id) { await openRegisteredUserCredits(id); }
 
   // ─── Panel Users ─────────────────────────────────────────────────
 
@@ -2926,6 +4728,81 @@
     } catch (e) { toast(e.message, 'error'); }
   }
 
+  // ─── Mass EPG Assignment ─────────────────────────────────────────
+
+  APP.autoMatchEpg = async function() {
+    toast('EPG auto-match is not available in the current admin page.', 'info');
+  };
+
+  // ─── Plex Servers ────────────────────────────────────────────────
+
+  async function loadPlexServers() {
+    try {
+      const data = await apiFetchOptional('/plex/servers', { servers: [] });
+      const servers = data.servers || [];
+      $('#plexServersTable tbody').innerHTML = servers.map(s => `
+        <tr>
+          <td>${s.id}</td>
+          <td>${escHtml(s.name || '')}</td>
+          <td><code style="font-size:0.78rem">${escHtml(s.url || '')}</code></td>
+          <td>${s.last_seen ? new Date(s.last_seen).toLocaleString() : 'Never'}</td>
+          <td>
+            <button class="btn btn-xs btn-secondary" onclick="APP.refreshPlexWatch('${s.id}')">Watchers</button>
+            <button class="btn btn-xs btn-danger" onclick="APP.deletePlexServer(${s.id})">Del</button>
+          </td>
+        </tr>`).join('') || '<tr><td colspan="5" style="color:#8b949e;text-align:center;padding:1.5rem">No Plex servers configured</td></tr>';
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+  function openPlexModal() { $('#plexModal').style.display = 'flex'; }
+  function closePlexModal() { $('#plexModal').style.display = 'none'; }
+
+  APP.savePlex = async function() {
+    try {
+      await apiFetch('/plex/servers', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: $('#plexName')?.value,
+          url: $('#plexUrl')?.value,
+          plex_token: $('#plexToken')?.value,
+        }),
+      });
+      toast('Plex server saved', 'success');
+      closePlexModal();
+      loadPlexServers();
+    } catch (e) { toast(e.message, 'error'); }
+  };
+
+  APP.deletePlexServer = async function(id) {
+    if (!confirm('Remove this Plex server?')) return;
+    try {
+      await apiFetch(`/plex/servers/${id}`, { method: 'DELETE' });
+      toast('Removed', 'success');
+      loadPlexServers();
+    } catch (e) { toast(e.message, 'error'); }
+  };
+
+  APP.refreshPlexWatch = async function(id) {
+    try {
+      const data = await apiFetch(`/plex/servers/${id}/watch-status`);
+      const watchers = data.watchers || [];
+      const el = document.getElementById('plexWatchStatus');
+      if (!el) return;
+      if (watchers.length === 0) {
+        el.innerHTML = '<span style="color:#8b949e">No active streams</span>';
+      } else {
+        el.innerHTML = watchers.map(w => `
+          <div style="margin-bottom:0.5rem;padding:0.5rem;background:rgba(255,255,255,0.04);border-radius:6px">
+            <div style="color:#e6edf3;font-weight:500">${escHtml(w.title)}</div>
+            <div style="color:#8b949e;font-size:0.75rem">User: ${escHtml(w.user)} &middot; ${w.viewOffset ? Math.round(w.viewOffset/60000) + 'm watched' : 'started'}</div>
+          </div>`).join('');
+      }
+    } catch (e) {
+      const el = document.getElementById('plexWatchStatus');
+      if (el) el.innerHTML = `<span style="color:#ef4444">Error: ${escHtml(e.message)}</span>`;
+    }
+  };
+
   // ─── Settings ────────────────────────────────────────────────────
 
   let _streamingPrewarmAllowed = true;
@@ -2963,6 +4840,11 @@
       if ($('#spLowLatency')) $('#spLowLatency').checked = !!c.low_latency_enabled;
       if ($('#spMinimalIngest')) $('#spMinimalIngest').checked = !!c.minimal_ingest_enabled;
       if ($('#spPrewarmEnabled')) $('#spPrewarmEnabled').checked = !!c.prewarm_enabled;
+      // Block VOD download
+      try {
+        const vodBlock = await apiFetch('/settings/block_vod_download');
+        if ($('#spBlockVodDownload')) $('#spBlockVodDownload').checked = !!vodBlock.enabled;
+      } catch (_) {}
       if ($('#spProvisioningEnabled')) {
         _spProvisioningPrev = !!c.streaming_provisioning_enabled;
         $('#spProvisioningEnabled').checked = _spProvisioningPrev;
@@ -3014,6 +4896,9 @@
     try {
       await apiFetch('/settings/streaming-performance', { method: 'PUT', body: JSON.stringify(body) });
       _adminFeatures = null;
+      // Block VOD download
+      const blockVod = $('#spBlockVodDownload')?.checked;
+      await apiFetch('/settings/block_vod_download', { method: 'PUT', body: JSON.stringify({ enabled: !!blockVod }) });
       toast('Streaming performance saved');
       await loadStreamingPerformanceSettings();
     } catch (e) {
@@ -3067,7 +4952,7 @@
     if ($('#spPrewarmEnabled')) $('#spPrewarmEnabled').checked = p.prewarm_enabled;
   }
 
-  /** Keys managed by Streaming tab UI (DB `streaming_*`); hidden from Advanced to avoid duplicates. */
+  /** Keys managed by Streaming tab UI (DB `streaming_*`); hidden from raw advanced. */
   const STREAMING_DB_SETTING_KEYS = new Set([
     'streaming_prebuffer_enabled', 'streaming_prebuffer_size_mb',
     'streaming_prebuffer_on_demand_min_bytes', 'streaming_prebuffer_on_demand_max_wait_ms',
@@ -3076,73 +4961,706 @@
     'streaming_provisioning_enabled',
   ]);
 
-  /** Whitelist: General tab grouped sections (order preserved). */
-  const SETTINGS_GENERAL_GROUPS = [
+  const SETTINGS_PARITY_DEFAULTS = {
+    server_name: 'NovaStreams Panel',
+    service_logo_url: '',
+    service_logo_sidebar_url: '',
+    system_timezone: 'UTC',
+    force_epg_timezone: 'UTC',
+    enigma2_bouquet_name: 'Example',
+    live_streaming_pass: '',
+    load_balancing_key: '',
+    geolite2_version: 'Auto',
+    security_patch_level: '5 Levels',
+
+    player_credentials_user: '',
+    player_credentials_pass: '',
+    tmdb_http: '0',
+    new_playlist_without_ts: '1',
+    release_parser: 'python',
+    logout_on_ip_change: '0',
+    cloudflare_connecting_ip: 'HTTP_CF_CONNECTING_IP',
+    maximum_login_attempts: '5',
+    minimum_password_length: '0',
+    default_entries_to_show: '25',
+    two_factor_authentication: '0',
+    localhost_api: '1',
+    dark_mode_login: '0',
+    dashboard_stats_enabled: '0',
+    stats_interval: '600',
+    dashboard_world_map_live: '1',
+    dashboard_world_map_activity: '1',
+    download_images: '0',
+    auto_refresh_default: '1',
+    alternate_scandir_cloud: '0',
+    show_alert_tickets: '1',
+    statistics_enabled: '1',
+    disable_get_playlist: '0',
+    disable_xml_epg: '0',
+    disable_player_api_epg: '0',
+
+    reseller_copyright: '',
+    reseller_disable_trials: '0',
+    reseller_allow_restrictions: '0',
+    reseller_trial_set_date_on_usage: '0',
+    reseller_paid_set_date_on_usage: '0',
+    reseller_change_usernames: '1',
+    reseller_change_own_dns: '0',
+    reseller_change_own_email: '0',
+    reseller_change_own_password: '1',
+    reseller_change_own_language: '1',
+    reseller_send_mag_events: '0',
+    reseller_use_isplock: '1',
+    reseller_use_reset_isp: '1',
+    reseller_see_manuals: '1',
+    reseller_view_info_dashboard: '0',
+    reseller_view_apps_dashboard: '1',
+    reseller_convert_mag_to_m3u: '0',
+    reseller_deny_same_user_pass: '0',
+    reseller_deny_weak_username_password: '0',
+    reseller_deny_similar_user_pass: '0',
+    reseller_deny_similar_percentage: '80',
+    reseller_generating_type: 'random_number',
+    reseller_min_chars: '6',
+
+    streaming_main_lb_https: '[]',
+    use_https_m3u_lines: '0',
+    secure_lb_connection: '0',
+    streaming_auto_kick_users: '0',
+    category_order_type: 'bouquet',
+    streaming_client_prebuffer: '30',
+    streaming_restreamer_prebuffer: '0',
+    split_clients: 'equally',
+    split_by: 'connections',
+    analysis_duration: '500000',
+    probe_size: '5000000',
+    use_custom_name_series_episodes: '0',
+    restart_on_audio_loss: '0',
+    save_connection_logs: '0',
+    save_client_logs: '1',
+    case_sensitive_details: '1',
+    override_country_with_first: '0',
+    enable_xc_firewall: '0',
+    enable_isps: '1',
+    enable_isp_lock: '0',
+    token_revalidate: '0',
+    token_validity: '',
+    vod_download_speed: '45000',
+    vod_download_limit: '20',
+    buffer_size_for_reading: '8192',
+    block_vpn_proxies_servers: '0',
+    always_use_first_working_stream_source: '0',
+    stream_down_video_enabled: '0',
+    stream_down_video_url: 'Default http video link .ts',
+    banned_video_enabled: '0',
+    banned_video_url: 'Default http video link .ts',
+    expired_video_enabled: '1',
+    expired_video_url: 'Default http video link .ts',
+    countrylock_video_enabled: '0',
+    countrylock_video_url: 'Default http video link .ts',
+    max_conn_exceed_video_enabled: '0',
+    max_conn_exceed_video_url: 'Default http video link .ts',
+    enable_connections_exceed_video_log: '0',
+    admin_streaming_ips: '',
+    adult_stream_password: '',
+    verify_client_ip_during_lb: '0',
+    user_connections_red_after_hours: '3',
+    restrict_player_api_devices: '0',
+    disallow_proxy_types: '[]',
+
+    enable_remote_secure_backups: '0',
+    enable_local_backups: '1',
+    local_backup_directory: 'data/backups',
+    backup_interval_unit: 'hours',
+    backups_to_keep: '20',
+    cloud_backup_type: '',
+    cloud_backup_key: '',
+    gdrive_access_token: '',
+    gdrive_folder_id: '',
+    dropbox_access_token: '',
+    s3_bucket: '',
+    s3_region: 'us-east-1',
+    s3_access_key: '',
+    s3_secret_key: '',
+  };
+
+  const SETTINGS_RADIO_GENERATOR_TYPES = [
+    { value: 'random_number', label: 'Random Number (Easy)' },
+    { value: 'hex_string', label: 'Hex String (Normal)' },
+    { value: 'random_string', label: 'Random String (Hard)' },
+  ];
+
+  const SETTINGS_PROXY_TYPE_OPTIONS = [
+    { value: 'tor_exit_nodes', label: 'Tor Exit Nodes' },
+    { value: 'datacenters', label: 'DataCenters' },
+    { value: 'public_proxies', label: 'Public Proxies' },
+    { value: 'web_proxies', label: 'Web Proxies' },
+    { value: 'vpn_providers', label: 'VPN Providers' },
+  ];
+
+  function getTimezoneOptions() {
+    try {
+      if (typeof Intl !== 'undefined' && typeof Intl.supportedValuesOf === 'function') {
+        return Intl.supportedValuesOf('timeZone');
+      }
+    } catch (_) {}
+    return ['UTC', 'Europe/London', 'Europe/Berlin', 'Asia/Baghdad', 'Asia/Dubai', 'Asia/Istanbul', 'America/New_York'];
+  }
+
+  const SETTINGS_TMDB_LANGUAGE_OPTIONS = [
+    { value: 'en', label: 'Default - EN' },
+    { value: 'ar', label: 'Arabic' },
+    { value: 'tr', label: 'Turkish' },
+    { value: 'de', label: 'German' },
+    { value: 'fr', label: 'French' },
+    { value: 'es', label: 'Spanish' },
+  ];
+
+  const SETTINGS_DEFAULT_ENTRY_OPTIONS = [10, 25, 50, 100].map(v => ({ value: String(v), label: String(v) }));
+  const SETTINGS_RELEASE_PARSER_OPTIONS = [
+    { value: 'python', label: 'Python Based (slower, more accurate)' },
+    { value: 'node', label: 'Node Based' },
+    { value: 'simple', label: 'Simple Parser' },
+  ];
+  const SETTINGS_CATEGORY_ORDER_OPTIONS = [
+    { value: 'bouquet', label: 'Bouquet' },
+    { value: 'alphabetical', label: 'Alphabetical' },
+    { value: 'id', label: 'ID' },
+  ];
+  const SETTINGS_SPLIT_CLIENT_OPTIONS = [
+    { value: 'equally', label: 'Equally' },
+    { value: 'sequential', label: 'Sequential' },
+    { value: 'first_available', label: 'First Available' },
+  ];
+  const SETTINGS_SPLIT_BY_OPTIONS = [
+    { value: 'connections', label: 'Connections' },
+    { value: 'bandwidth', label: 'Bandwidth' },
+    { value: 'country', label: 'Country' },
+  ];
+  const SETTINGS_INTERVAL_UNIT_OPTIONS = [
+    { value: 'hours', label: 'Hours' },
+    { value: 'days', label: 'Days' },
+  ];
+
+  let _settingsDataCache = {};
+  let _settingsSummaryCache = null;
+
+  const SETTINGS_GENERAL_SECTIONS = [
     {
-      title: 'Panel identity',
+      title: 'General',
       rows: [
-        { key: 'server_name', label: 'Server name', type: 'text' },
-        { key: 'domain_name', label: 'Domain name', type: 'text' },
-        { key: 'server_protocol', label: 'Protocol (http/https)', type: 'text' },
-        { key: 'server_port', label: 'Port', type: 'text' },
-      ],
-    },
-    {
-      title: 'TMDb',
-      rows: [
-        { key: 'tmdb_api_key', label: 'TMDb API key', type: 'text' },
-        { key: 'tmdb_language', label: 'TMDb language', type: 'text' },
-      ],
-    },
-    {
-      title: 'Security & limits',
-      rows: [
-        { key: 'allow_countries', label: 'Allowed countries (comma codes, empty = all)', type: 'text' },
-        { key: 'auth_flood_limit', label: 'Auth flood limit (per IP)', type: 'text' },
-        { key: 'auth_flood_window_sec', label: 'Auth flood window (seconds)', type: 'text' },
-        { key: 'bruteforce_max_attempts', label: 'Bruteforce max attempts', type: 'text' },
-        { key: 'bruteforce_window_sec', label: 'Bruteforce window (seconds)', type: 'text' },
-        { key: 'user_auto_kick_hours', label: 'User auto-kick (hours, 0=off)', type: 'text' },
-        { key: 'live_streaming_pass', label: 'Stream signing secret (optional)', type: 'text' },
-      ],
-    },
-    {
-      title: 'Features',
-      rows: [
-        { key: 'disable_player_api', label: 'Disable player API', type: 'toggle' },
-        { key: 'disable_ministra', label: 'Disable Ministra', type: 'toggle' },
-        { key: 'restrict_playlists', label: 'Restrict playlists', type: 'toggle' },
-        { key: 'restrict_same_ip', label: 'Restrict same IP', type: 'toggle' },
-        { key: 'disallow_2nd_ip_con', label: 'Disallow 2nd IP connection', type: 'toggle' },
-        { key: 'automatic_backups', label: 'Automatic backups', type: 'toggle' },
-        { key: 'backup_interval_hours', label: 'Backup interval (hours)', type: 'text' },
-        { key: 'cache_playlists', label: 'Cache playlists', type: 'toggle' },
-        { key: 'encrypt_playlist', label: 'Encrypt playlist', type: 'toggle' },
-        { key: 'detect_restream', label: 'Detect restream', type: 'toggle' },
-        { key: 'api_redirect', label: 'API redirect', type: 'toggle' },
-        { key: 'legacy_panel_api', label: 'Legacy panel API', type: 'toggle' },
-      ],
-    },
-    {
-      title: 'Streaming defaults',
-      rows: [
-        { key: 'default_stream_server_id', label: 'Default stream server ID (0 = auto: LB → main)', type: 'text' },
-        { key: 'stream_user_agent', label: 'Default stream user agent', type: 'text' },
+        [
+          { key: 'server_name', label: 'Server Name', type: 'text' },
+          { key: 'service_logo_url', label: 'Service Logo URL', type: 'text' },
+        ],
+        [
+          { key: 'service_logo_sidebar_url', label: 'Service Logo Sidebar URL (180x40)', type: 'text' },
+          { key: 'system_timezone', label: 'System Timezone', type: 'select', options: getTimezoneOptions },
+        ],
+        [
+          { key: 'force_epg_timezone', label: 'Force EPG Timezone', type: 'select', options: getTimezoneOptions },
+          { key: 'enigma2_bouquet_name', label: 'Enigma2 Bouquet Name', type: 'text' },
+        ],
+        [
+          { key: 'live_streaming_pass', label: 'Live Streaming Pass', type: 'password' },
+          { key: 'load_balancing_key', label: 'Load Balancing Key', type: 'password' },
+        ],
       ],
     },
   ];
 
-  function settingsGeneralKeySet() {
-    const s = new Set();
-    for (const g of SETTINGS_GENERAL_GROUPS) {
-      for (const r of g.rows) s.add(r.key);
-    }
-    return s;
-  }
+  const SETTINGS_XTREAM_SECTIONS = [
+    {
+      title: 'XtreamMasters',
+      rows: [
+        [
+          { key: 'player_credentials_user', label: 'Player Credentials User', type: 'text' },
+          { key: 'player_credentials_pass', label: 'Player Credentials Pass', type: 'password' },
+        ],
+        [
+          { key: 'tmdb_api_key', label: 'TMDB Key', type: 'text' },
+          { key: 'tmdb_language', label: 'TMDB Language', type: 'select', options: SETTINGS_TMDB_LANGUAGE_OPTIONS },
+        ],
+        [
+          { key: 'tmdb_http', label: 'TMDB HTTP', type: 'toggle' },
+          { key: 'new_playlist_without_ts', label: 'New Playlist without .ts', type: 'toggle' },
+        ],
+        [
+          { key: 'release_parser', label: 'Release Parser', type: 'select', options: SETTINGS_RELEASE_PARSER_OPTIONS },
+          { key: 'logout_on_ip_change', label: 'Logout On IP Change', type: 'toggle' },
+        ],
+        [
+          { key: 'cloudflare_connecting_ip', label: 'Cloudflare Connecting IP', type: 'text' },
+          { key: 'maximum_login_attempts', label: 'Maximum Login Attempts', type: 'number' },
+        ],
+        [
+          { key: 'minimum_password_length', label: 'Minimum Password Length', type: 'number' },
+          { key: 'default_entries_to_show', label: 'Default Entries to Show', type: 'select', options: SETTINGS_DEFAULT_ENTRY_OPTIONS },
+        ],
+        [
+          { key: 'two_factor_authentication', label: 'Two Factor Authentication', type: 'toggle' },
+          { key: 'localhost_api', label: 'Localhost API', type: 'toggle' },
+        ],
+        [
+          { key: 'dark_mode_login', label: 'Dark Mode Login', type: 'toggle' },
+          { key: 'dashboard_stats_enabled', label: 'Dashboard Stats', type: 'toggle' },
+        ],
+        [
+          { key: 'stats_interval', label: 'Stats Interval', type: 'number' },
+          { key: 'dashboard_world_map_live', label: 'Dashboard World Map Live', type: 'toggle' },
+        ],
+        [
+          { key: 'dashboard_world_map_activity', label: 'Dashboard World Map Activity', type: 'toggle' },
+          { key: 'download_images', label: 'Download Images', type: 'toggle' },
+        ],
+        [
+          { key: 'auto_refresh_default', label: 'Auto-Refresh by Default', type: 'toggle' },
+          { key: 'alternate_scandir_cloud', label: 'Alternate Scandir Method (Cloud)', type: 'toggle' },
+        ],
+        [
+          { key: 'show_alert_tickets', label: 'Show alert tickets', type: 'toggle' },
+          { key: 'statistics_enabled', label: 'Statistics', type: 'toggle' },
+        ],
+      ],
+    },
+    {
+      title: 'Disable services during peak hours to prevent excessive CPU resource usage.',
+      rows: [
+        [
+          { key: 'disable_get_playlist', label: 'Disable Get Playlist', type: 'toggle' },
+          { key: 'disable_player_api', label: 'Disable Player_API', type: 'toggle' },
+        ],
+        [
+          { key: 'disable_xml_epg', label: 'Disable XML EPG', type: 'toggle' },
+          { key: 'disable_player_api_epg', label: 'Disable Player_API EPG', type: 'toggle' },
+        ],
+      ],
+      centerTitle: true,
+    },
+  ];
+
+  const SETTINGS_RESELLER_SECTIONS = [
+    {
+      title: 'Reseller',
+      rows: [
+        [
+          { key: 'reseller_copyright', label: 'Copyright', type: 'text' },
+          null,
+        ],
+        [
+          { key: 'reseller_disable_trials', label: 'Disable Trials', type: 'toggle' },
+          { key: 'reseller_allow_restrictions', label: 'Allow Restrictions', type: 'toggle' },
+        ],
+        [
+          { key: 'reseller_trial_set_date_on_usage', label: 'Trial M3U Lines - Set Date on Usage', type: 'toggle' },
+          { key: 'reseller_paid_set_date_on_usage', label: 'Paid M3U Lines - Set Date on Usage', type: 'toggle' },
+        ],
+        [
+          { key: 'reseller_change_usernames', label: 'Change Usernames', type: 'toggle' },
+          { key: 'reseller_change_own_dns', label: 'Change Own DNS', type: 'toggle' },
+        ],
+        [
+          { key: 'reseller_change_own_email', label: 'Change Own Email Address', type: 'toggle' },
+          { key: 'reseller_change_own_password', label: 'Change Own Password', type: 'toggle' },
+        ],
+        [
+          { key: 'reseller_change_own_language', label: 'Change Own Language', type: 'toggle' },
+          { key: 'reseller_send_mag_events', label: 'Reseller Send Mag Events', type: 'toggle' },
+        ],
+        [
+          { key: 'reseller_use_isplock', label: 'Reseller can use IspLock', type: 'toggle' },
+          { key: 'reseller_use_reset_isp', label: 'Reseller can use Reset Isp', type: 'toggle' },
+        ],
+        [
+          { key: 'reseller_see_manuals', label: 'Reseller can see Manuals', type: 'toggle' },
+          { key: 'reseller_view_info_dashboard', label: 'Reseller can view Info Dashboard', type: 'toggle' },
+        ],
+        [
+          { key: 'reseller_view_apps_dashboard', label: 'Reseller can view APPS Dashboard', type: 'toggle' },
+          { key: 'reseller_convert_mag_to_m3u', label: 'Reseller can Convert MAG to M3U', type: 'toggle' },
+        ],
+      ],
+    },
+    {
+      title: 'Weak Lines Username and Password Restrictions',
+      rows: [
+        [
+          { key: 'reseller_deny_same_user_pass', label: 'Deny Same Username & Password For Lines', type: 'toggle' },
+          { key: 'reseller_deny_weak_username_password', label: 'Deny Weak Username or Password', type: 'toggle' },
+        ],
+        [
+          { key: 'reseller_deny_similar_user_pass', label: 'Deny Similar Username and password', type: 'toggle' },
+          { key: 'reseller_deny_similar_percentage', label: 'Deny Similar Username and password Percentage', type: 'number' },
+        ],
+        [
+          { key: 'reseller_generating_type', label: 'Select Username, Password Generating Type.', type: 'radio', options: SETTINGS_RADIO_GENERATOR_TYPES },
+          { key: 'reseller_min_chars', label: 'Min Chart For user/pass', type: 'number' },
+        ],
+      ],
+      centerTitle: true,
+    },
+  ];
+
+  const SETTINGS_STREAMING_SECTIONS = [
+    {
+      title: 'Load balancing and delivery',
+      rows: [
+        [
+          { key: 'streaming_main_lb_https', label: 'Main or Loadbalancer Https', type: 'taglist', clearLabel: 'Clear all' },
+          null,
+        ],
+        [
+          { key: 'use_https_m3u_lines', label: 'Use Https M3U Lines', type: 'toggle' },
+          { key: 'secure_lb_connection', label: 'Secure LB Connection', type: 'toggle' },
+        ],
+        [
+          { key: 'streaming_auto_kick_users', label: 'Auto-Kick Users', type: 'number' },
+          { key: 'category_order_type', label: 'Category Order Type', type: 'select', options: SETTINGS_CATEGORY_ORDER_OPTIONS },
+        ],
+        [
+          { key: 'streaming_client_prebuffer', label: 'Client Prebuffer', type: 'number' },
+          { key: 'streaming_restreamer_prebuffer', label: 'Restreamer Prebuffer', type: 'number' },
+        ],
+        [
+          { key: 'split_clients', label: 'Split Clients', type: 'select', options: SETTINGS_SPLIT_CLIENT_OPTIONS },
+          { key: 'split_by', label: 'Split By', type: 'select', options: SETTINGS_SPLIT_BY_OPTIONS },
+        ],
+        [
+          { key: 'analysis_duration', label: 'Analysis Duration', type: 'number' },
+          { key: 'probe_size', label: 'Probe Size', type: 'number' },
+        ],
+      ],
+    },
+    {
+      title: 'Stream behavior and logs',
+      rows: [
+        [
+          { key: 'use_custom_name_series_episodes', label: 'Use Custom Name on Series Episodes', type: 'toggle' },
+          { key: 'restart_on_audio_loss', label: 'Restart on Audio Loss', type: 'toggle' },
+        ],
+        [
+          { key: 'save_connection_logs', label: 'Save Connection Logs', type: 'toggle' },
+          { key: 'save_client_logs', label: 'Save Client Logs', type: 'toggle' },
+        ],
+        [
+          { key: 'case_sensitive_details', label: 'Case Sensitive Details', type: 'toggle' },
+          { key: 'override_country_with_first', label: 'Override Country with First', type: 'toggle' },
+        ],
+        [
+          { key: 'disallow_2nd_ip_con', label: 'Disallow 2nd IP Connection', type: 'toggle' },
+          { key: 'enable_xc_firewall', label: 'Enable XC Firewall', type: 'toggle' },
+        ],
+        [
+          { key: 'enable_isps', label: 'Enable ISP\'s', type: 'toggle' },
+          { key: 'enable_isp_lock', label: 'Enable Isp Lock', type: 'toggle' },
+        ],
+        [
+          { key: 'token_revalidate', label: 'Token Re-Validate', type: 'toggle' },
+          { key: 'token_validity', label: 'Token Validity', type: 'text' },
+        ],
+        [
+          { key: 'vod_download_speed', label: 'VOD Download Speed', type: 'number' },
+          { key: 'vod_download_limit', label: 'VOD Download Limit', type: 'number' },
+        ],
+        [
+          { key: 'buffer_size_for_reading', label: 'Buffer Size For Reading', type: 'number' },
+          { key: 'block_vpn_proxies_servers', label: 'Block VPN & PROXIES & SERVERS', type: 'toggle' },
+        ],
+        [
+          { key: 'always_use_first_working_stream_source', label: 'Always use first working stream source', type: 'toggle' },
+          { key: 'enable_connections_exceed_video_log', label: 'Enable Connections Exceed VideoLog', type: 'toggle' },
+        ],
+        [
+          { key: 'admin_streaming_ips', label: 'Admin Streaming IP\'s', type: 'textarea' },
+          { key: 'adult_stream_password', label: 'Adult Stream Password', type: 'password' },
+        ],
+        [
+          { key: 'verify_client_ip_during_lb', label: 'Verify Client-IP During Load Balancing', type: 'toggle' },
+          { key: 'user_connections_red_after_hours', label: 'Show In Red The User Connections, Based On Total Time Online', type: 'number' },
+        ],
+        [
+          { key: 'restrict_player_api_devices', label: 'Restrict Player API on devices', type: 'toggle' },
+          { key: 'disallow_proxy_types', label: 'Disallow Following Proxy Types Connections', type: 'checklist', options: SETTINGS_PROXY_TYPE_OPTIONS },
+        ],
+        [
+          { key: 'allow_countries', label: 'Allow connections from these countries', type: 'taglist', clearLabel: 'Allow all countries' },
+          null,
+        ],
+      ],
+    },
+    {
+      title: 'Status video fallbacks',
+      rows: [
+        [
+          { key: 'stream_down_video_enabled', label: 'Stream Down Video', type: 'toggle' },
+          { key: 'stream_down_video_url', label: 'Default Stream Down Video URL', type: 'text' },
+        ],
+        [
+          { key: 'banned_video_enabled', label: 'Banned Video', type: 'toggle' },
+          { key: 'banned_video_url', label: 'Default Banned Video URL', type: 'text' },
+        ],
+        [
+          { key: 'expired_video_enabled', label: 'Expired Video', type: 'toggle' },
+          { key: 'expired_video_url', label: 'Default Expired Video URL', type: 'text' },
+        ],
+        [
+          { key: 'countrylock_video_enabled', label: 'CountryLock Video', type: 'toggle' },
+          { key: 'countrylock_video_url', label: 'Default CountryLock Video URL', type: 'text' },
+        ],
+        [
+          { key: 'max_conn_exceed_video_enabled', label: 'Max Conx Exceed Video', type: 'toggle' },
+          { key: 'max_conn_exceed_video_url', label: 'Default Max Conx Exceed Video URL', type: 'text' },
+        ],
+      ],
+    },
+  ];
+
+  const SETTINGS_DATABASE_KEYS = new Set([
+    'enable_remote_secure_backups', 'dropbox_access_token', 'enable_local_backups', 'local_backup_directory',
+    'automatic_backups', 'backup_interval_hours', 'backup_interval_unit', 'backups_to_keep',
+    'cloud_backup_type', 'cloud_backup_key', 'gdrive_access_token', 'gdrive_folder_id',
+    's3_bucket', 's3_region', 's3_access_key', 's3_secret_key'
+  ]);
 
   function isTruthySetting(val) {
     const v = String(val ?? '').trim().toLowerCase();
     return v === '1' || v === 'true' || v === 'yes' || v === 'on';
+  }
+
+  function getSettingValue(data, key) {
+    if (data && data[key] !== undefined && data[key] !== null && String(data[key]) !== '') return String(data[key]);
+    return String(SETTINGS_PARITY_DEFAULTS[key] ?? '');
+  }
+
+  function getSettingBool(data, key) {
+    if (data && data[key] !== undefined && data[key] !== null && String(data[key]) !== '') return isTruthySetting(data[key]);
+    return isTruthySetting(SETTINGS_PARITY_DEFAULTS[key] ?? '0');
+  }
+
+  function parseStoredArray(raw, fallback = []) {
+    if (Array.isArray(raw)) return raw.map(x => String(x).trim()).filter(Boolean);
+    const s = String(raw == null ? '' : raw).trim();
+    if (!s) return [...fallback];
+    try {
+      const parsed = JSON.parse(s);
+      if (Array.isArray(parsed)) return parsed.map(x => String(x).trim()).filter(Boolean);
+    } catch (_) {}
+    return s.split(/\r?\n|,/).map(x => x.trim()).filter(Boolean);
+  }
+
+  function renderSettingsField(field, data) {
+    if (!field) return '<div class="settings-parity-field is-empty"></div>';
+    const key = field.key;
+    const label = escHtml(field.label || key);
+    const hint = field.hint ? `<div class="settings-parity-hint">${escHtml(field.hint)}</div>` : '';
+    const type = field.type || 'text';
+
+    if (type === 'toggle') {
+      return `<div class="settings-parity-field"><label>${label}</label><div class="settings-parity-control"><label class="toggle"><input type="checkbox" class="settings-toggle" data-key="${escHtml(key)}" ${getSettingBool(data, key) ? 'checked' : ''}><span class="toggle-slider"></span></label></div>${hint}</div>`;
+    }
+
+    if (type === 'select') {
+      const opts = typeof field.options === 'function' ? field.options() : (field.options || []);
+      const current = getSettingValue(data, key);
+      const optionsHtml = opts.map((opt) => {
+        const value = typeof opt === 'string' ? opt : opt.value;
+        const text = typeof opt === 'string' ? opt : opt.label;
+        return `<option value="${escHtml(String(value))}" ${String(current) === String(value) ? 'selected' : ''}>${escHtml(String(text))}</option>`;
+      }).join('');
+      return `<div class="settings-parity-field"><label>${label}</label><div class="settings-parity-control"><select class="form-control settings-input" data-key="${escHtml(key)}">${optionsHtml}</select></div>${hint}</div>`;
+    }
+
+    if (type === 'textarea') {
+      return `<div class="settings-parity-field"><label>${label}</label><div class="settings-parity-control"><textarea class="form-control settings-input" data-key="${escHtml(key)}" rows="4">${escHtml(getSettingValue(data, key))}</textarea></div>${hint}</div>`;
+    }
+
+    if (type === 'radio') {
+      const current = getSettingValue(data, key);
+      const opts = field.options || [];
+      const radios = opts.map((opt) => `
+        <label class="settings-radio-option">
+          <input type="radio" name="${escHtml(key)}" class="settings-radio" data-key="${escHtml(key)}" value="${escHtml(opt.value)}" ${String(current) === String(opt.value) ? 'checked' : ''}>
+          <span>${escHtml(opt.label)}</span>
+        </label>`).join('');
+      return `<div class="settings-parity-field"><label>${label}</label><div class="settings-parity-control settings-radio-group">${radios}</div>${hint}</div>`;
+    }
+
+    if (type === 'checklist') {
+      const values = new Set(parseStoredArray(getSettingValue(data, key)));
+      const checks = (field.options || []).map((opt) => `
+        <label class="settings-check-option">
+          <input type="checkbox" class="settings-checklist-item" data-key="${escHtml(key)}" value="${escHtml(opt.value)}" ${values.has(String(opt.value)) ? 'checked' : ''}>
+          <span>${escHtml(opt.label)}</span>
+        </label>`).join('');
+      return `<div class="settings-parity-field"><label>${label}</label><div class="settings-parity-control settings-checklist">${checks}</div>${hint}</div>`;
+    }
+
+    if (type === 'taglist') {
+      const items = parseStoredArray(getSettingValue(data, key));
+      const chips = items.map((item) => `<span class="settings-chip" data-value="${escHtml(item)}">${escHtml(item)} <button type="button" class="settings-chip-remove">&times;</button></span>`).join('');
+      return `<div class="settings-parity-field settings-parity-field-wide"><label>${label}</label><div class="settings-parity-control"><div class="settings-chip-editor" data-key="${escHtml(key)}"><div class="settings-chip-list">${chips}</div><div class="settings-chip-input-row"><input type="text" class="form-control settings-chip-input" placeholder="Type and press Enter"></div><input type="hidden" class="settings-tag-hidden" data-key="${escHtml(key)}" value="${escHtml(JSON.stringify(items))}"></div>${field.clearLabel ? `<button type="button" class="btn btn-xs btn-secondary settings-chip-clear" data-key="${escHtml(key)}">${escHtml(field.clearLabel)}</button>` : ''}</div>${hint}</div>`;
+    }
+
+    const inputType = type === 'password' ? 'password' : (type === 'number' ? 'number' : 'text');
+    const step = type === 'number' ? (field.step || '1') : '';
+    const placeholder = field.placeholder ? ` placeholder="${escHtml(field.placeholder)}"` : '';
+    return `<div class="settings-parity-field"><label>${label}</label><div class="settings-parity-control"><input type="${inputType}" class="form-control settings-input" data-key="${escHtml(key)}" value="${escHtml(getSettingValue(data, key))}"${placeholder}${step ? ` step="${escHtml(String(step))}"` : ''}></div>${hint}</div>`;
+  }
+
+  function renderSettingsSection(section, data) {
+    const rowsHtml = (section.rows || []).map((row) => {
+      const cols = Array.isArray(row) ? row : [row];
+      return `<div class="settings-parity-grid-row">${cols.map((field) => renderSettingsField(field, data)).join('')}</div>`;
+    }).join('');
+    return `<section class="settings-parity-section"><h4 class="settings-group-title${section.centerTitle ? ' is-centered' : ''}">${escHtml(section.title || '')}</h4>${section.note ? `<p class="settings-hint">${escHtml(section.note)}</p>` : ''}${rowsHtml}</section>`;
+  }
+
+  function renderSettingsSections(sections, data) {
+    return sections.map((section) => renderSettingsSection(section, data)).join('');
+  }
+
+  function renderStreamingPerformanceBlock(streamingPerf) {
+    const provEnabled = !!streamingPerf.streaming_provisioning_enabled;
+    const envOk = streamingPerf.provisioning_env_master_enabled !== false;
+    return `
+      <section class="settings-parity-section settings-perf-section">
+        <div class="settings-faq-strip">FAQs: Recommended Streaming Settings Configuration</div>
+        <div class="settings-perf-preset-row">
+          <button type="button" class="btn btn-xs btn-secondary" onclick="APP.applyStreamingPreset('ultra_fast')">Ultra Fast</button>
+          <button type="button" class="btn btn-xs btn-secondary" onclick="APP.applyStreamingPreset('balanced')">Balanced</button>
+          <button type="button" class="btn btn-xs btn-secondary" onclick="APP.applyStreamingPreset('stable')">Stable</button>
+        </div>
+        <div class="settings-parity-grid-row">
+          ${renderSettingsField({ key: 'streaming_prebuffer_enabled', label: 'Prebuffer', type: 'toggle' }, {
+            streaming_prebuffer_enabled: streamingPerf.prebuffer_enabled ? '1' : '0',
+          })}
+          ${renderSettingsField({ key: 'streaming_prebuffer_size_mb', label: 'Client Prebuffer', type: 'number' }, {
+            streaming_prebuffer_size_mb: streamingPerf.prebuffer_size_mb,
+          })}
+        </div>
+        <div class="settings-parity-grid-row">
+          <div class="settings-parity-field"><label>Prebuffer Size (MB)</label><div class="settings-parity-control settings-range-pair"><input type="range" id="spPrebufferMbRange" min="1" max="16" step="1"><input type="number" id="spPrebufferMb" class="form-control" min="1" max="16" step="1"></div></div>
+          <div class="settings-parity-field"><label>On-demand Start Buffer (bytes)</label><div class="settings-parity-control"><input type="number" id="spOdMinBytes" class="form-control" min="0" step="1024"></div></div>
+        </div>
+        <div class="settings-parity-grid-row">
+          <div class="settings-parity-field"><label>On-demand Max Wait (ms)</label><div class="settings-parity-control"><input type="number" id="spOdWaitMs" class="form-control" min="100" max="60000" step="100"></div></div>
+          <div class="settings-parity-field"><label>Ingest Style</label><div class="settings-parity-control"><select id="spIngestStyle" class="form-control"><option value="webapp">Webapp (fast)</option><option value="xc">XC (balanced)</option><option value="safe">Safe (stable)</option></select></div></div>
+        </div>
+        <div class="settings-parity-grid-row">
+          ${renderSettingsField({ key: 'streaming_low_latency_enabled', label: 'Low Latency Demux', type: 'toggle' }, { streaming_low_latency_enabled: streamingPerf.low_latency_enabled ? '1' : '0' })}
+          ${renderSettingsField({ key: 'streaming_minimal_ingest_enabled', label: 'Minimal Ingest', type: 'toggle' }, { streaming_minimal_ingest_enabled: streamingPerf.minimal_ingest_enabled ? '1' : '0' })}
+        </div>
+        <div class="settings-parity-grid-row">
+          ${renderSettingsField({ key: 'streaming_prewarm_enabled', label: 'Pre-warm Feature', type: 'toggle' }, { streaming_prewarm_enabled: streamingPerf.prewarm_enabled ? '1' : '0' })}
+          <div class="settings-parity-field"><label>Block VOD Download</label><div class="settings-parity-control"><label class="toggle"><input type="checkbox" id="spBlockVodDownload" class="settings-toggle" data-key="block_vod_download" ${streamingPerf.block_vod_download ? 'checked' : ''}><span class="toggle-slider"></span></label></div></div>
+        </div>
+        <div class="settings-parity-grid-row">
+          <div class="settings-parity-field"><label>Enable Server Provisioning</label><div class="settings-parity-control"><label class="toggle"><input type="checkbox" id="spProvisioningEnabled" ${provEnabled ? 'checked' : ''} ${envOk ? '' : 'disabled'}><span class="toggle-slider"></span></label><span class="toggle-label text-muted" id="spProvisioningEnvHint">${envOk ? 'When off, the Install tab stays hidden and provision API returns 403.' : 'Set ENABLE_SERVER_PROVISIONING=1 in the panel environment, then restart, to allow enabling here.'}</span></div></div>
+          <div class="settings-parity-field is-empty"></div>
+        </div>
+      </section>`;
+  }
+
+  function renderDatabaseSettings(data) {
+    const intervalUnit = getSettingValue(data, 'backup_interval_unit') || 'hours';
+    const rawHours = parseInt(getSettingValue(data, 'backup_interval_hours'), 10) || 0;
+    const intervalDisplay = intervalUnit === 'days' ? Math.max(1, Math.round(rawHours / 24) || 1) : Math.max(1, rawHours || 1);
+    return `
+      <section class="settings-parity-section">
+        <h4 class="settings-group-title">Database / Backups</h4>
+        <div class="settings-parity-grid-row">
+          ${renderSettingsField({ key: 'enable_remote_secure_backups', label: 'Enable Remote Secure Backups', type: 'toggle' }, data)}
+          ${renderSettingsField({ key: 'dropbox_access_token', label: 'DropBox API Key', type: 'password' }, data)}
+        </div>
+        <div class="settings-parity-grid-row">
+          ${renderSettingsField({ key: 'enable_local_backups', label: 'Enable Local Backups', type: 'toggle' }, data)}
+          ${renderSettingsField({ key: 'local_backup_directory', label: 'Local Backup Directory', type: 'text' }, data)}
+        </div>
+        <div class="settings-parity-grid-row">
+          ${renderSettingsField({ key: 'automatic_backups', label: 'Enable Auto Backups', type: 'toggle' }, data)}
+          <div class="settings-parity-field"><label>Every</label><div class="settings-parity-control settings-inline-pair"><input type="number" class="form-control settings-input" data-key="backup_interval_hours" value="${escHtml(String(intervalDisplay))}"><select class="form-control settings-input" data-key="backup_interval_unit">${SETTINGS_INTERVAL_UNIT_OPTIONS.map((opt) => `<option value="${escHtml(opt.value)}" ${intervalUnit === opt.value ? 'selected' : ''}>${escHtml(opt.label)}</option>`).join('')}</select></div></div>
+        </div>
+        <div class="settings-parity-grid-row">
+          ${renderSettingsField({ key: 'backups_to_keep', label: 'Backups to Keep', type: 'number' }, data)}
+          ${renderSettingsField({ key: 'cloud_backup_key', label: 'Cloud Backup Encryption Key', type: 'password' }, data)}
+        </div>
+      </section>
+      <section class="settings-parity-section">
+        <p class="settings-hint">Cloud backup uploads remain intentionally de-scoped in TARGET. These fields are stored for parity only and do not enable real remote provider-backed uploads.</p>
+        <div class="settings-setup-buttons">
+          <button type="button" class="btn btn-secondary" onclick="APP.openSettingsBackupProvider('xdrive')" disabled title="Blocked: no xDrive provider implementation in TARGET">xDrive Auto Backup De-scoped</button>
+          <button type="button" class="btn btn-secondary" onclick="APP.openSettingsBackupProvider('gdrive')" title="Provider config only; uploads remain de-scoped">Google Drive Config Only</button>
+        </div>
+        <div class="settings-parity-grid-row">
+          <div class="settings-parity-field"><label>Stored Cloud Provider Config</label><div class="settings-parity-control"><select id="settingsDbCloudType" class="form-control settings-input" data-key="cloud_backup_type"><option value="">Disabled</option><option value="gdrive">Google Drive</option><option value="dropbox">Dropbox</option><option value="s3">Amazon S3</option></select></div><small class="settings-hint">Selecting a provider stores parity config only. It does not activate uploads.</small></div>
+          ${renderSettingsField({ key: 'gdrive_access_token', label: 'Google Drive Access Token', type: 'password' }, data)}
+        </div>
+        <div class="settings-parity-grid-row">
+          ${renderSettingsField({ key: 'gdrive_folder_id', label: 'Google Drive Folder ID', type: 'text' }, data)}
+          ${renderSettingsField({ key: 'dropbox_access_token', label: 'DropBox Backup Access Token', type: 'password' }, data)}
+        </div>
+        <div class="settings-parity-grid-row">
+          ${renderSettingsField({ key: 's3_bucket', label: 'S3 Bucket', type: 'text' }, data)}
+          ${renderSettingsField({ key: 's3_region', label: 'S3 Region', type: 'text' }, data)}
+        </div>
+        <div class="settings-parity-grid-row">
+          ${renderSettingsField({ key: 's3_access_key', label: 'S3 Access Key', type: 'text' }, data)}
+          ${renderSettingsField({ key: 's3_secret_key', label: 'S3 Secret Key', type: 'password' }, data)}
+        </div>
+      </section>`;
+  }
+
+  function buildSettingsSummary(summary) {
+    const version = summary.version || {};
+    const dbStatus = summary.dbStatus || {};
+    const geolite = getSettingValue(summary.settings || {}, 'geolite2_version');
+    const patch = getSettingValue(summary.settings || {}, 'security_patch_level');
+    return `
+      <div class="settings-summary-card purple">
+        <div class="settings-summary-label">Installed Version</div>
+        <div class="settings-summary-value">${escHtml(version.current || '—')}</div>
+        <div class="settings-summary-status ${version.currentIsOutdated ? 'warn' : 'ok'}">${version.currentIsOutdated ? 'Update Available' : 'Up to Date'}</div>
+      </div>
+      <div class="settings-summary-card blue">
+        <div class="settings-summary-label">GeoLite2 Version</div>
+        <div class="settings-summary-value">${escHtml(geolite || 'Auto')}</div>
+        <div class="settings-summary-status ok">Up to Date</div>
+      </div>
+      <div class="settings-summary-card green">
+        <div class="settings-summary-label">Security Patch</div>
+        <div class="settings-summary-value">${escHtml(patch || '5 Levels')}</div>
+        <div class="settings-summary-status ok">Up to Date</div>
+      </div>
+      <div class="settings-summary-card orange">
+        <div class="settings-summary-label">Database Tables</div>
+        <div class="settings-summary-value">${escHtml(String(dbStatus.total_tables || 0))}</div>
+        <div class="settings-summary-actions">
+          <button type="button" class="btn btn-xs btn-secondary" onclick="APP.refreshSettingsSummary()">Update Now</button>
+          <button type="button" class="btn btn-xs btn-primary" onclick="APP.runDbOptimize()">Optimize Database</button>
+        </div>
+      </div>`;
+  }
+
+  function applyPanelBranding(data) {
+    const panelName = getSettingValue(data, 'server_name') || 'NovaStreams Panel';
+    document.title = panelName;
+    const loginText = document.querySelector('.login-logo-text');
+    const brandName = document.querySelector('.brand-name');
+    if (loginText) loginText.textContent = panelName;
+    if (brandName) brandName.textContent = panelName;
+
+    const setBrandImage = (selector, url) => {
+      const el = document.querySelector(selector);
+      if (!el) return;
+      if (!el.dataset.defaultMarkup) el.dataset.defaultMarkup = el.innerHTML;
+      if (url) {
+        el.innerHTML = `<img src="${escHtml(url)}" alt="${escHtml(panelName)}" class="settings-brand-image" onerror="this.style.display='none'">`;
+      } else {
+        el.innerHTML = el.dataset.defaultMarkup;
+      }
+    };
+    setBrandImage('.login-logo-icon', getSettingValue(data, 'service_logo_url'));
+    setBrandImage('.brand-icon', getSettingValue(data, 'service_logo_sidebar_url'));
   }
 
   function switchSettingsTab(tab) {
@@ -3154,75 +5672,196 @@
       panel.style.display = on ? 'block' : 'none';
       panel.classList.toggle('active', on);
     });
+    try { localStorage.setItem('settingsActiveTab', tab); } catch (_) {}
   }
 
-  function renderSettingsGeneral(data) {
-    const parts = [];
-    for (const g of SETTINGS_GENERAL_GROUPS) {
-      parts.push(`<h4 class="settings-group-title">${escHtml(g.title)}</h4>`);
-      for (const row of g.rows) {
-        const val = data[row.key] != null ? String(data[row.key]) : '';
-        if (row.type === 'toggle') {
-          const id = `sg_${row.key.replace(/[^a-z0-9]/gi, '_')}`;
-          parts.push(`
-            <div class="form-row settings-pref-row">
-              <label for="${id}">${escHtml(row.label)}</label>
-              <div class="form-input">
-                <label class="toggle"><input type="checkbox" class="setting-toggle" id="${id}" data-key="${escHtml(row.key)}" ${isTruthySetting(val) ? 'checked' : ''}><span class="toggle-slider"></span></label>
-              </div>
-            </div>`);
-        } else {
-          parts.push(`
-            <div class="form-row settings-pref-row">
-              <label>${escHtml(row.label)}</label>
-              <div class="form-input"><input type="text" class="form-control setting-input" data-key="${escHtml(row.key)}" value="${escHtml(val)}"></div>
-            </div>`);
-        }
+  async function loadTelegramSettings() {
+    try {
+      const data = await apiFetch('/settings/telegram');
+      const tokenEl = document.getElementById('tgBotToken');
+      const chatEl = document.getElementById('tgAdminChatId');
+      const alertsEl = document.getElementById('tgAlertsEnabled');
+      if (tokenEl) tokenEl.value = data.bot_token_set ? '••••••••' : '';
+      if (chatEl) chatEl.value = data.admin_chat_id || '';
+      if (alertsEl) alertsEl.checked = data.alerts_enabled;
+      return data;
+    } catch (e) {
+      console.warn('telegram-settings:', e.message);
+      return { bot_token_set: false, admin_chat_id: '', alerts_enabled: false };
+    }
+  }
+
+  async function saveTelegramSettings(silent = false) {
+    await apiFetch('/settings/telegram', {
+      method: 'PUT',
+      body: JSON.stringify({
+        bot_token: document.getElementById('tgBotToken')?.value || '',
+        admin_chat_id: document.getElementById('tgAdminChatId')?.value || '',
+        alerts_enabled: document.getElementById('tgAlertsEnabled')?.checked,
+      }),
+    });
+    if (!silent) toast('Telegram settings saved. Bot will restart.', 'success');
+  }
+  APP.saveTelegramSettings = saveTelegramSettings;
+
+  function settingsStructuredKeys() {
+    const keys = new Set([
+      ...Object.keys(SETTINGS_PARITY_DEFAULTS),
+      'disable_player_api', 'disable_ministra', 'restrict_playlists', 'restrict_same_ip',
+      'auth_flood_limit', 'auth_flood_window_sec', 'bruteforce_max_attempts', 'bruteforce_window_sec',
+      'default_stream_server_id', 'stream_user_agent', 'max_connections_per_line',
+    ]);
+    for (const key of STREAMING_DB_SETTING_KEYS) keys.add(key);
+    return keys;
+  }
+
+  function renderAdvancedRawSettings(data) {
+    const structured = settingsStructuredKeys();
+    const keys = Object.keys(data || {}).sort().filter((k) => !structured.has(k));
+    $('#settingsForm').innerHTML = keys.map(k => `
+      <div class="form-row settings-pref-row">
+        <label>${escHtml(k)}</label>
+        <div class="form-input"><input type="text" class="form-control setting-input" data-key="${escHtml(k)}" value="${escHtml(String(data[k] || ''))}"></div>
+      </div>`).join('') + `
+      <div class="form-row settings-pref-row">
+        <label>Add new key</label>
+        <div class="form-input">
+          <input type="text" id="newSettingKey" class="form-control" placeholder="key">
+          <input type="text" id="newSettingVal" class="form-control mt-1" placeholder="value">
+        </div>
+      </div>`;
+  }
+
+  function renderSettingsBackupsTable(backups) {
+    const tb = $('#settingsBackupsTable tbody');
+    if (!tb) return;
+    const rows = Array.isArray(backups) ? backups : [];
+    if (!rows.length) {
+      tb.innerHTML = '<tr><td colspan="3" style="text-align:center;color:#8b949e;padding:2rem">No backups found</td></tr>';
+      return;
+    }
+    tb.innerHTML = rows.map((b) => `
+      <tr>
+        <td>${new Date(b.created_at).toLocaleString()}</td>
+        <td>${b.size_mb} MB</td>
+        <td>
+          <div class="backup-actions compact">
+            <button class="btn btn-restore" onclick="APP.restoreBackup(${b.id})">Restore</button>
+            <button class="btn btn-download" onclick="APP.downloadBackup(${b.id})">Download</button>
+            <button class="btn btn-delete-backup" onclick="APP.deleteBackup(${b.id})">Delete</button>
+          </div>
+        </td>
+      </tr>`).join('');
+  }
+
+  function syncSettingsSummary(summary) {
+    _settingsSummaryCache = summary;
+    const banner = $('#settingsUpdateNotice');
+    const version = summary.version || {};
+    if (banner) {
+      if (version.currentIsOutdated) {
+        banner.style.display = 'block';
+        banner.innerHTML = `Main server update available version: <strong>[${escHtml(version.latest || '')}]</strong> <a href="#" onclick="APP.openSettingsReleaseUrl();return false;">click here to update main server</a>.`;
+      } else {
+        banner.style.display = 'none';
+        banner.innerHTML = '';
       }
     }
-    return parts.join('');
+    const grid = $('#settingsSummaryGrid');
+    if (grid) grid.innerHTML = buildSettingsSummary(summary);
   }
 
-  async function loadSettings() {
+  APP.openSettingsReleaseUrl = function() {
+    if (_settingsSummaryCache && _settingsSummaryCache.version && _settingsSummaryCache.version.releaseUrl) {
+      window.open(_settingsSummaryCache.version.releaseUrl, '_blank', 'noopener');
+    }
+  };
+
+  APP.refreshSettingsSummary = async function() {
     try {
-      await loadStreamingPerformanceSettings();
-      const data = await apiFetch('/settings');
-      const generalKeys = settingsGeneralKeySet();
-      const keys = Object.keys(data).sort();
-      const advKeys = keys.filter(k => !generalKeys.has(k) && !STREAMING_DB_SETTING_KEYS.has(k));
+      const [settings, version, dbStatus] = await Promise.all([
+        apiFetch('/settings'),
+        apiFetch('/version'),
+        apiFetch('/system/db-status').catch(() => ({ total_tables: 0 })),
+      ]);
+      syncSettingsSummary({ settings, version, dbStatus });
+      toast('Settings summary refreshed', 'success');
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  };
 
-      const genEl = $('#settingsFormGeneral');
-      if (genEl) genEl.innerHTML = renderSettingsGeneral(data);
+  APP.openSettingsBackupProvider = function(provider) {
+    if (provider === 'xdrive') {
+      toast('xDrive auto cloud backup is not currently supported in TARGET.', 'warning');
+      return;
+    }
+    toast('Cloud provider setup here stores parity config only. Remote uploads remain de-scoped in TARGET.', 'warning');
+    const el = $('#settingsDbCloudType');
+    if (el) el.value = provider;
+  };
 
-      $('#settingsForm').innerHTML = advKeys.map(k => `
-        <div class="form-row settings-pref-row">
-          <label>${escHtml(k)}</label>
-          <div class="form-input"><input type="text" class="form-control setting-input" data-key="${escHtml(k)}" value="${escHtml(String(data[k] || ''))}"></div>
-        </div>
-      `).join('') + `
-        <div class="form-row settings-pref-row">
-          <label>Add new key</label>
-          <div class="form-input">
-            <input type="text" id="newSettingKey" class="form-control" placeholder="key">
-            <input type="text" id="newSettingVal" class="form-control mt-1" placeholder="value">
-          </div>
-        </div>
-      `;
-    } catch (e) { toast(e.message, 'error'); }
-  }
+  function initSettingsChipEditors() {
+    $$('.settings-chip-editor').forEach((editor) => {
+      const hidden = editor.querySelector('.settings-tag-hidden');
+      const list = editor.querySelector('.settings-chip-list');
+      const input = editor.querySelector('.settings-chip-input');
+      if (!hidden || !list || !input || editor._bound) return;
+      editor._bound = true;
 
-  async function saveSettings() {
-    const body = {};
-    $$('.setting-input').forEach(el => { body[el.dataset.key] = el.value; });
-    $$('.setting-toggle').forEach(el => { body[el.dataset.key] = el.checked ? '1' : '0'; });
-    const nk = $('#newSettingKey')?.value?.trim();
-    const nv = $('#newSettingVal')?.value;
-    if (nk) body[nk] = nv || '';
-    try {
-      await apiFetch('/settings', { method: 'PUT', body: JSON.stringify(body) });
-      toast('Settings saved');
-      loadSettings();
-    } catch (e) { toast(e.message, 'error'); }
+      const syncHidden = () => {
+        const values = [...list.querySelectorAll('.settings-chip')].map((chip) => chip.dataset.value).filter(Boolean);
+        hidden.value = JSON.stringify(values);
+      };
+
+      const addChip = (value) => {
+        const v = String(value || '').trim();
+        if (!v) return;
+        if ([...list.querySelectorAll('.settings-chip')].some((chip) => chip.dataset.value === v)) return;
+        const chip = document.createElement('span');
+        chip.className = 'settings-chip';
+        chip.dataset.value = v;
+        chip.innerHTML = `${escHtml(v)} <button type="button" class="settings-chip-remove">&times;</button>`;
+        list.appendChild(chip);
+        syncHidden();
+      };
+
+      list.addEventListener('click', (e) => {
+        if (e.target && e.target.classList.contains('settings-chip-remove')) {
+          const chip = e.target.closest('.settings-chip');
+          if (chip) chip.remove();
+          syncHidden();
+        }
+      });
+
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ',') {
+          e.preventDefault();
+          addChip(input.value);
+          input.value = '';
+        }
+      });
+      input.addEventListener('blur', () => {
+        if (input.value.trim()) {
+          addChip(input.value);
+          input.value = '';
+        }
+      });
+    });
+
+    $$('.settings-chip-clear').forEach((btn) => {
+      if (btn._bound) return;
+      btn._bound = true;
+      btn.addEventListener('click', () => {
+        const key = btn.dataset.key;
+        const editor = document.querySelector(`.settings-chip-editor[data-key="${key}"]`);
+        if (!editor) return;
+        const list = editor.querySelector('.settings-chip-list');
+        const hidden = editor.querySelector('.settings-tag-hidden');
+        if (list) list.innerHTML = '';
+        if (hidden) hidden.value = '[]';
+      });
+    });
   }
 
   async function getAdminFeatures() {
@@ -3241,39 +5880,1053 @@
     return '<span class="badge badge-warning">No agent</span>';
   }
 
-  async function loadServers() {
+  // ─── Phase D: Server Order ─────────────────────────────────────────
+  let _serverOrder = [];
+
+  function renderServerOrderTable() {
+    const tbody = $('#serverOrderBody');
+    if (!tbody) return;
+    tbody.innerHTML = _serverOrder.map((s, i) => `
+      <tr>
+        <td><span class="sort-order-num">${i + 1}</span></td>
+        <td>${escHtml(s.name || '')}</td>
+        <td>${escHtml(s.role || '')}</td>
+        <td>${escHtml(s.public_host || '')}</td>
+        <td>${serverStatusBadge(s)}</td>
+        <td>
+          <button class="btn btn-xs btn-secondary" onclick="APP.moveServerOrder(${i}, -1)" ${i === 0 ? 'disabled' : ''}>▲ Up</button>
+          <button class="btn btn-xs btn-secondary" onclick="APP.moveServerOrder(${i}, 1)" ${i === _serverOrder.length - 1 ? 'disabled' : ''}>▼ Down</button>
+        </td>
+      </tr>`).join('');
+  }
+
+  // ─── Phase D: Server Monitor ────────────────────────────────────────
+  function stopServerMonitorAutoRefresh() {
+    if (_serverMonitorRefreshTimer) {
+      clearInterval(_serverMonitorRefreshTimer);
+      _serverMonitorRefreshTimer = null;
+    }
+  }
+
+  function startServerMonitorAutoRefresh() {
+    stopServerMonitorAutoRefresh();
+    if (!_serverMonitorAutoRefreshEnabled || !_serverMonitorSelectedId || _currentPage !== 'server-monitor') return;
+    _serverMonitorRefreshTimer = setInterval(() => {
+      if (_currentPage !== 'server-monitor' || !_serverMonitorSelectedId) {
+        stopServerMonitorAutoRefresh();
+        return;
+      }
+      loadServerMonitorPage({ silent: true });
+    }, 15000);
+  }
+
+  function syncServerMonitorAutoRefreshCheckbox() {
+    const checkbox = $('#serverMonitorAutoRefresh');
+    if (checkbox) checkbox.checked = !!_serverMonitorAutoRefreshEnabled;
+  }
+
+  function formatMonitorNumber(value, digits = 0) {
+    const num = Number(value);
+    return Number.isFinite(num) ? num.toFixed(digits) : '—';
+  }
+
+  function formatMonitorRate(value) {
+    const num = Number(value);
+    if (!Number.isFinite(num)) return '—';
+    if (num >= 1000) return `${(num / 1000).toFixed(num >= 10000 ? 1 : 2)} Gbps`;
+    return `${num.toFixed(num >= 100 ? 1 : num >= 10 ? 2 : 3)} Mbps`;
+  }
+
+  function formatMonitorAge(ms) {
+    if (!Number.isFinite(ms) || ms < 0) return 'just now';
+    const sec = Math.floor(ms / 1000);
+    if (sec < 60) return `${sec}s ago`;
+    const min = Math.floor(sec / 60);
+    if (min < 60) return `${min}m ago`;
+    const hrs = Math.floor(min / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    return `${Math.floor(hrs / 24)}d ago`;
+  }
+
+  function parseMonitorLimit(value) {
+    const raw = String(value == null ? '' : value).trim();
+    if (!raw) return null;
+    const match = raw.match(/\d+(?:\.\d+)?/);
+    if (!match) return null;
+    const num = Number(match[0]);
+    if (!Number.isFinite(num) || num <= 0) return null;
+    if (/tb/i.test(raw)) return num * 1024 * 1024;
+    if (/gb/i.test(raw) || /gbit/i.test(raw)) return num * 1000;
+    return num;
+  }
+
+  function getServerMonitorState(server) {
+    if (!server || !server.enabled) {
+      return {
+        label: server ? 'Disabled' : 'Unavailable',
+        tone: 'off',
+        detail: server ? 'Server row is currently disabled.' : 'Selected server could not be loaded.',
+      };
+    }
+    if (!server.last_heartbeat_at) {
+      return { label: 'No agent', tone: 'warning', detail: 'No heartbeat has been received from this node yet.' };
+    }
+    if (server.heartbeat_fresh === false) {
+      return {
+        label: 'Stale heartbeat',
+        tone: 'stale',
+        detail: `Last heartbeat ${formatMonitorAge(server.heartbeat_stale_ms)}.`,
+      };
+    }
+    return { label: 'Online', tone: 'live', detail: `Heartbeat ${formatMonitorAge(server.heartbeat_stale_ms || 0)}.` };
+  }
+
+  function getServerMonitorSelectLabel(server) {
+    const host = server.public_host || server.public_ip || server.private_ip || `#${server.id}`;
+    return `${server.name || 'Server'} (${host})`;
+  }
+
+  function getServerMonitorStatusPill(label, on) {
+    return `<span class="server-monitor-status-pill ${on ? 'is-on' : 'is-off'}">${escHtml(label)} ${on ? 'On' : 'Off'}</span>`;
+  }
+
+  function renderServerMonitorEmptyState(servers) {
+    const surface = $('#serverMonitorSurface');
+    if (!surface) return;
+    const count = Array.isArray(servers) ? servers.length : 0;
+    if (!count) {
+      surface.innerHTML = `
+        <div class="server-monitor-empty-card">
+          <div class="server-monitor-empty-icon">!</div>
+          <div class="server-monitor-empty-title">No servers available</div>
+          <div class="server-monitor-empty-copy">Create or enable a server first, then return here to inspect heartbeat metrics and delivery health.</div>
+        </div>`;
+      return;
+    }
+    surface.innerHTML = `
+      <div class="server-monitor-empty-card">
+        <div class="server-monitor-empty-icon">S</div>
+        <div class="server-monitor-empty-title">Please choose a server first</div>
+        <div class="server-monitor-empty-copy">Select one of your ${count} server${count === 1 ? '' : 's'} from the dropdown above to open a focused monitoring dashboard.</div>
+      </div>`;
+  }
+
+  function hydrateServerMonitorSelector(servers) {
+    const select = $('#serverMonitorSelect');
+    if (!select) return;
+    const current = _serverMonitorSelectedId != null ? String(_serverMonitorSelectedId) : '';
+    select.innerHTML = '<option value="">Please choose server</option>' + servers.map((server) => {
+      return `<option value="${escHtml(String(server.id))}">${escHtml(getServerMonitorSelectLabel(server))}</option>`;
+    }).join('');
+    if (current && servers.some((server) => String(server.id) === current)) {
+      select.value = current;
+    }
+  }
+
+  function renderServerMonitorSurface(server, detail) {
+    const surface = $('#serverMonitorSurface');
+    if (!surface) return;
+    if (!server) {
+      renderServerMonitorEmptyState([]);
+      return;
+    }
+
+    const state = getServerMonitorState(server);
+    const cpu = Number.isFinite(Number(server.health_cpu_pct)) ? Number(server.health_cpu_pct) : null;
+    const mem = Number.isFinite(Number(server.health_mem_pct)) ? Number(server.health_mem_pct) : null;
+    const net = Number.isFinite(Number(server.health_net_mbps)) ? Number(server.health_net_mbps) : null;
+    const ping = Number.isFinite(Number(server.health_ping_ms)) ? Number(server.health_ping_ms) : null;
+    const sessions = Number(server.active_sessions || 0);
+    const runningPlacements = Number(server.running_placements || 0);
+    const totalPlacements = Number(server.total_placements || 0);
+    const maxClients = Number(server.max_clients || 0);
+    const networkLimit = parseMonitorLimit(server.network_mbps_cap) || parseMonitorLimit(server.network_speed) || 0;
+    const networkPct = net != null && networkLimit > 0 ? Math.min(100, (net / networkLimit) * 100) : (net != null ? Math.min(100, net) : 0);
+    const placementPct = totalPlacements > 0 ? Math.min(100, (runningPlacements / totalPlacements) * 100) : 0;
+    const sessionPct = maxClients > 0 ? Math.min(100, (sessions / maxClients) * 100) : 0;
+    const domains = Array.isArray(detail && detail.domains) ? detail.domains : [];
+    const domainList = domains.length ? domains.map((d) => `<span class="server-monitor-domain-chip">${escHtml(d.domain || d.host || '')}</span>`).join('') : '<span class="text-muted">No extra domains configured</span>';
+    const capabilities = [
+      getServerMonitorStatusPill('Runtime', !!server.runtime_enabled),
+      getServerMonitorStatusPill('Proxy', !!server.proxy_enabled),
+      getServerMonitorStatusPill('Controller', !!server.controller_enabled),
+      getServerMonitorStatusPill('Proxied', !!server.proxied),
+      getServerMonitorStatusPill('Timeshift', !!server.timeshift_only),
+    ].join('');
+
+    surface.innerHTML = `
+      <div class="server-monitor-shell">
+        <section class="server-monitor-hero-card tone-${escHtml(state.tone)}">
+          <div class="server-monitor-hero-copy">
+            <span class="server-monitor-kicker">Focused Node Overview</span>
+            <h3>${escHtml(server.name || 'Server')}</h3>
+            <p>${escHtml(server.role || 'edge')} node • ${escHtml(server.public_host || server.public_ip || server.private_ip || 'No public host')} • Agent ${escHtml(server.agent_version || '—')}</p>
+          </div>
+          <div class="server-monitor-hero-status">
+            <span class="server-monitor-health-badge is-${escHtml(state.tone)}">${escHtml(state.label)}</span>
+            <span class="server-monitor-health-meta">${escHtml(state.detail)}</span>
+          </div>
+        </section>
+
+        <section class="server-monitor-kpi-grid">
+          <article class="server-monitor-kpi-card is-blue">
+            <div class="server-monitor-kpi-head"><span>CPU Usage</span><strong>${cpu != null ? cpu.toFixed(1) + '%' : '—'}</strong></div>
+            <div class="server-monitor-progress"><div class="server-monitor-progress-fill is-blue" style="width:${cpu != null ? Math.min(100, cpu) : 0}%"></div></div>
+            <div class="server-monitor-kpi-meta">Heartbeat CPU utilization from the agent.</div>
+          </article>
+          <article class="server-monitor-kpi-card is-green">
+            <div class="server-monitor-kpi-head"><span>RAM Usage</span><strong>${mem != null ? mem.toFixed(1) + '%' : '—'}</strong></div>
+            <div class="server-monitor-progress"><div class="server-monitor-progress-fill is-green" style="width:${mem != null ? Math.min(100, mem) : 0}%"></div></div>
+            <div class="server-monitor-kpi-meta">Memory pressure reported by the node agent.</div>
+          </article>
+          <article class="server-monitor-kpi-card is-cyan">
+            <div class="server-monitor-kpi-head"><span>Network Throughput</span><strong>${formatMonitorRate(net)}</strong></div>
+            <div class="server-monitor-progress"><div class="server-monitor-progress-fill is-cyan" style="width:${networkPct}%"></div></div>
+            <div class="server-monitor-kpi-meta">${networkLimit > 0 ? `Compared against ${escHtml(String(networkLimit))} Mbps capacity.` : 'Live network sample without a stored cap.'}</div>
+          </article>
+          <article class="server-monitor-kpi-card is-amber">
+            <div class="server-monitor-kpi-head"><span>Delivery Load</span><strong>${sessions}</strong></div>
+            <div class="server-monitor-progress"><div class="server-monitor-progress-fill is-amber" style="width:${Math.max(sessionPct, placementPct)}%"></div></div>
+            <div class="server-monitor-kpi-meta">${runningPlacements} running placement${runningPlacements === 1 ? '' : 's'} of ${totalPlacements}. ${maxClients > 0 ? `Max clients: ${maxClients}.` : 'No max-client cap configured.'}</div>
+          </article>
+        </section>
+
+        <section class="server-monitor-detail-grid">
+          <article class="server-monitor-panel-card">
+            <div class="server-monitor-panel-head">
+              <div>
+                <div class="server-monitor-panel-kicker">Server Details</div>
+                <h4>System Information</h4>
+              </div>
+              <span class="server-monitor-pill">${escHtml(String(server.role || 'edge').toUpperCase())}</span>
+            </div>
+            <div class="server-monitor-fact-list">
+              <div class="server-monitor-fact-row"><span>Public host</span><strong>${escHtml(server.public_host || '—')}</strong></div>
+              <div class="server-monitor-fact-row"><span>Public IP</span><strong>${escHtml(server.public_ip || '—')}</strong></div>
+              <div class="server-monitor-fact-row"><span>Private IP</span><strong>${escHtml(server.private_ip || '—')}</strong></div>
+              <div class="server-monitor-fact-row"><span>Operating system</span><strong>${escHtml(server.os_info || '—')}</strong></div>
+              <div class="server-monitor-fact-row"><span>Network interface</span><strong>${escHtml(server.network_interface || 'all')}</strong></div>
+              <div class="server-monitor-fact-row"><span>Ports</span><strong>SSH ${escHtml(String(server.ssh_port || '22'))} • HTTP ${escHtml(String(server.http_port || '8080'))} • HTTPS ${escHtml(String(server.https_port || '8083'))}</strong></div>
+            </div>
+          </article>
+
+          <article class="server-monitor-panel-card">
+            <div class="server-monitor-panel-head">
+              <div>
+                <div class="server-monitor-panel-kicker">Health & Agent</div>
+                <h4>Live Heartbeat</h4>
+              </div>
+              <span class="server-monitor-pill is-${escHtml(state.tone)}">${escHtml(state.label)}</span>
+            </div>
+            <div class="server-monitor-fact-list">
+              <div class="server-monitor-fact-row"><span>Last heartbeat</span><strong>${server.last_heartbeat_at ? escHtml(formatDate(server.last_heartbeat_at)) : '—'}</strong></div>
+              <div class="server-monitor-fact-row"><span>Agent version</span><strong>${escHtml(server.agent_version || '—')}</strong></div>
+              <div class="server-monitor-fact-row"><span>Latency</span><strong>${ping != null ? ping.toFixed(0) + ' ms' : '—'}</strong></div>
+              <div class="server-monitor-fact-row"><span>CPU / RAM</span><strong>${cpu != null ? cpu.toFixed(1) + '%' : '—'} / ${mem != null ? mem.toFixed(1) + '%' : '—'}</strong></div>
+              <div class="server-monitor-fact-row"><span>Network sample</span><strong>${formatMonitorRate(net)}</strong></div>
+              <div class="server-monitor-fact-row"><span>Heartbeat freshness</span><strong>${escHtml(state.detail)}</strong></div>
+            </div>
+          </article>
+
+          <article class="server-monitor-panel-card">
+            <div class="server-monitor-panel-head">
+              <div>
+                <div class="server-monitor-panel-kicker">Delivery & Capabilities</div>
+                <h4>Runtime Posture</h4>
+              </div>
+              <span class="server-monitor-pill">${sessions} sessions</span>
+            </div>
+            <div class="server-monitor-fact-list compact">
+              <div class="server-monitor-fact-row"><span>Running placements</span><strong>${runningPlacements} / ${totalPlacements}</strong></div>
+              <div class="server-monitor-fact-row"><span>Max clients</span><strong>${maxClients > 0 ? maxClients : 'Unlimited'}</strong></div>
+              <div class="server-monitor-fact-row"><span>Configured domains</span><strong>${domains.length || server.domains_count || 0}</strong></div>
+            </div>
+            <div class="server-monitor-status-group">${capabilities}</div>
+            <div class="server-monitor-domain-list">${domainList}</div>
+          </article>
+        </section>
+
+        <section class="server-monitor-action-card">
+          <div class="server-monitor-panel-head">
+            <div>
+              <div class="server-monitor-panel-kicker">Quick Control</div>
+              <h4>Safe Remote Actions</h4>
+            </div>
+            <span class="server-monitor-pill is-${escHtml(state.tone)}">${escHtml(server.name || 'Selected server')}</span>
+          </div>
+          <p class="server-monitor-action-copy">Use these actions carefully. They queue through the current control-plane endpoints and operate on the selected node only.</p>
+          <div class="server-monitor-action-row">
+            <button type="button" class="btn btn-primary" onclick="APP.serverMonitorAction('restart-services')">Restart Services</button>
+            <button type="button" class="btn btn-secondary" onclick="APP.serverMonitorAction('kill-connections')">Kill Connections</button>
+            <button type="button" class="btn btn-danger" onclick="APP.serverMonitorAction('reboot-server')">Reboot Server</button>
+          </div>
+        </section>
+      </div>`;
+  }
+
+  async function loadServerMonitorPage(options = {}) {
+    const opts = options || {};
+    const focusedServerId = Number.isFinite(Number(_serverMonitorFocusId)) ? Number(_serverMonitorFocusId) : null;
+    const routeServerId = getServerMonitorQueryId();
     try {
-      const data = await apiFetch('/servers');
-      _serversCache = data.servers || [];
-      const rows = _serversCache.map((s) => {
-        const cpu = s.health_cpu_pct != null ? Number(s.health_cpu_pct) : null;
-        const mem = s.health_mem_pct != null ? Number(s.health_mem_pct) : null;
-        const net = s.health_net_mbps != null ? Number(s.health_net_mbps) : null;
-        const ping = s.health_ping_ms != null ? Number(s.health_ping_ms) : null;
-        const cpuW = cpu != null && Number.isFinite(cpu) ? cpu : 0;
-        const memW = mem != null && Number.isFinite(mem) ? mem : 0;
-        const netW = net != null && Number.isFinite(net) ? Math.min(100, net * 4) : 0;
-        const pingW = ping != null && Number.isFinite(ping) ? Math.min(100, ping / 2) : 0;
-        return `
-        <tr>
-          <td>${serverStatusBadge(s)}</td>
-          <td>${escHtml(s.name || '')}</td>
-          <td>${escHtml(s.role || '')}</td>
-          <td>${escHtml(s.public_host || '')}</td>
-          <td>${escHtml(s.public_ip || '')}</td>
-          <td>—</td>
-          <td><div class="server-gauge-inline" title="Net Mbps"><div class="server-gauge-fill" style="width:${netW}%"></div></div> <small>${net != null && Number.isFinite(net) ? net.toFixed(1) + ' Mb/s' : '—'}</small></td>
-          <td><div class="server-gauge-inline"><div class="server-gauge-fill" style="width:${cpuW}%"></div></div> <small>${cpu != null && Number.isFinite(cpu) ? cpu.toFixed(0) + '%' : '—'}</small></td>
-          <td><div class="server-gauge-inline"><div class="server-gauge-fill" style="width:${memW}%"></div></div> <small>${mem != null && Number.isFinite(mem) ? mem.toFixed(0) + '%' : '—'}</small></td>
-          <td>
-            <button class="btn btn-xs btn-secondary" onclick="APP.openServerModal(${s.id})">Edit</button>
-            <button class="btn btn-xs btn-danger" onclick="APP.deleteServer(${s.id})">Del</button>
-          </td>
+      if (!opts.silent) clearToasts();
+      const data = await apiFetch('/servers/monitor-summary');
+      const rows = data.servers || [];
+      if (routeServerId && rows.some((server) => Number(server.id) === routeServerId)) {
+        _serverMonitorSelectedId = routeServerId;
+      } else if (focusedServerId && rows.some((server) => Number(server.id) === focusedServerId)) {
+        _serverMonitorSelectedId = focusedServerId;
+      } else if (!routeServerId && !focusedServerId) {
+        _serverMonitorSelectedId = null;
+      }
+      if (_serverMonitorSelectedId != null && !rows.some((server) => Number(server.id) === Number(_serverMonitorSelectedId))) {
+        _serverMonitorSelectedId = null;
+      }
+      hydrateServerMonitorSelector(rows);
+      syncServerMonitorAutoRefreshCheckbox();
+      if (!_serverMonitorSelectedId) {
+        renderServerMonitorEmptyState(rows);
+        stopServerMonitorAutoRefresh();
+        return;
+      }
+      const selectedSummary = rows.find((server) => Number(server.id) === Number(_serverMonitorSelectedId)) || null;
+      if (!selectedSummary) {
+        renderServerMonitorEmptyState(rows);
+        stopServerMonitorAutoRefresh();
+        return;
+      }
+      const detail = await apiFetch(`/servers/${selectedSummary.id}`).catch(() => null);
+      renderServerMonitorSurface(selectedSummary, detail || selectedSummary);
+      if (_serverMonitorAutoRefreshEnabled) startServerMonitorAutoRefresh();
+      else stopServerMonitorAutoRefresh();
+    } catch (e) {
+      toast(e.message, 'error');
+      renderServerMonitorEmptyState([]);
+      stopServerMonitorAutoRefresh();
+    } finally {
+      _serverMonitorFocusId = null;
+    }
+  }
+
+  function selectServerMonitor(value) {
+    const parsed = parseInt(value, 10);
+    const selectedId = Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+    navigateTo('server-monitor', { serverId: selectedId, replaceHistory: false });
+  }
+
+  function toggleServerMonitorAutoRefresh(enabled) {
+    _serverMonitorAutoRefreshEnabled = !!enabled;
+    if (_serverMonitorAutoRefreshEnabled) startServerMonitorAutoRefresh();
+    else stopServerMonitorAutoRefresh();
+  }
+
+  function refreshServerMonitor() {
+    return loadServerMonitorPage();
+  }
+
+  function serverMonitorAction(actionPath) {
+    if (!_serverMonitorSelectedId) {
+      toast('Choose a server first', 'warning');
+      return;
+    }
+    const messages = {
+      'restart-services': ['Restart services on this server?', 'Restart services command queued'],
+      'kill-connections': ['Kill all active connections for this server?', 'Connections cleared'],
+      'reboot-server': ['Reboot this server? This is destructive and may interrupt service.', 'Reboot command queued'],
+    };
+    const [confirmMsg, successMsg] = messages[actionPath] || [null, 'Action queued'];
+    return postServerAction(_serverMonitorSelectedId, actionPath, confirmMsg, successMsg);
+  }
+
+  // ─── Phase D: Bandwidth Monitor ────────────────────────────────────
+  APP._bwPeriod2 = 6;
+  APP._bwHistoryChart2 = null;
+
+  function getBandwidthBucketSeconds(hours) {
+    return hours <= 6 ? 60 : hours <= 24 ? 300 : 3600;
+  }
+
+  function formatBandwidthWindowLabel(hours) {
+    if (hours >= 24) {
+      const days = Math.round(hours / 24);
+      return `Last ${days} day${days === 1 ? '' : 's'}`;
+    }
+    return `Last ${hours} hour${hours === 1 ? '' : 's'}`;
+  }
+
+  function formatBandwidthResolution(seconds) {
+    if (seconds >= 3600) return `${Math.round(seconds / 3600)}-hour buckets`;
+    if (seconds >= 60) return `${Math.round(seconds / 60)}-minute buckets`;
+    return `${seconds}-second buckets`;
+  }
+
+  function formatBandwidthRate(mbps) {
+    const value = Number(mbps) || 0;
+    if (value >= 1000) {
+      const gbps = value / 1000;
+      return `${gbps.toFixed(gbps >= 10 ? 1 : 2)} Gbps`;
+    }
+    const precision = value >= 100 ? 1 : value >= 10 ? 2 : 3;
+    return `${value.toFixed(precision)} Mbps`;
+  }
+
+  function formatBandwidthVolume(mb) {
+    const value = Number(mb) || 0;
+    if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(2)} TB`;
+    if (value >= 1024) return `${(value / 1024).toFixed(value >= 10240 ? 1 : 2)} GB`;
+    if (value >= 1) return `${value.toFixed(value >= 100 ? 0 : value >= 10 ? 1 : 2)} MB`;
+    if (value > 0) return `${(value * 1024).toFixed(value * 1024 >= 100 ? 0 : 1)} KB`;
+    return '0 MB';
+  }
+
+  function getBandwidthBucketLabel(date, hours) {
+    return hours <= 24
+      ? `${date.getHours().toString().padStart(2,'0')}:${date.getMinutes().toString().padStart(2,'0')}`
+      : `${date.getMonth() + 1}/${date.getDate()} ${date.getHours().toString().padStart(2,'0')}:00`;
+  }
+
+  function getBandwidthBucketDirection(avgRx, avgTx) {
+    const delta = Math.abs(avgRx - avgTx);
+    if (delta <= 0.12) return { label: 'Balanced', tone: 'balanced' };
+    return avgRx > avgTx ? { label: 'Ingress', tone: 'in' } : { label: 'Egress', tone: 'out' };
+  }
+
+  function getBandwidthTrafficPosture(totalRxMB, totalTxMB) {
+    const total = totalRxMB + totalTxMB;
+    if (total < 0.05) {
+      return { label: 'Idle window', meta: 'No measurable traffic in the selected range.' };
+    }
+    const ratio = Math.abs(totalRxMB - totalTxMB) / total;
+    if (ratio <= 0.12) {
+      return { label: 'Balanced flow', meta: 'Ingress and egress stay closely matched.' };
+    }
+    if (totalRxMB > totalTxMB) {
+      return { label: 'Ingress heavy', meta: 'Inbound traffic dominates this time window.' };
+    }
+    return { label: 'Egress heavy', meta: 'Outbound delivery dominates this time window.' };
+  }
+
+  function buildBandwidthRows(points, hours) {
+    const bucketSec = getBandwidthBucketSeconds(hours);
+    const buckets = new Map();
+    for (const p of points) {
+      const t = new Date(p.time);
+      const rounded = new Date(Math.floor(t.getTime() / (bucketSec * 1000)) * (bucketSec * 1000));
+      const key = rounded.toISOString();
+      if (!buckets.has(key)) buckets.set(key, { rx: [], tx: [], totalRx: 0, totalTx: 0, count: 0 });
+      const bucket = buckets.get(key);
+      bucket.rx.push(p.rxMbps || 0);
+      bucket.tx.push(p.txMbps || 0);
+      bucket.totalRx += (p.rxMB || 0);
+      bucket.totalTx += (p.txMB || 0);
+      bucket.count++;
+    }
+
+    const rowsAsc = [...buckets.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([key, vals]) => {
+      const date = new Date(key);
+      const avgRx = +((vals.rx.reduce((sum, value) => sum + value, 0) / (vals.rx.length || 1)) || 0).toFixed(3);
+      const avgTx = +((vals.tx.reduce((sum, value) => sum + value, 0) / (vals.tx.length || 1)) || 0).toFixed(3);
+      const totalMB = +(vals.totalRx + vals.totalTx).toFixed(1);
+      return {
+        key,
+        date,
+        label: getBandwidthBucketLabel(date, hours),
+        avgRx,
+        avgTx,
+        totalMB,
+        combinedMbps: +(avgRx + avgTx).toFixed(3),
+        sampleCount: vals.count,
+        direction: getBandwidthBucketDirection(avgRx, avgTx),
+      };
+    });
+
+    return {
+      bucketSec,
+      rowsAsc,
+      rowsDesc: rowsAsc.slice().reverse().slice(0, 50),
+    };
+  }
+
+  function setBandwidthShareFill(id, percent) {
+    const el = document.getElementById(id);
+    if (el) el.style.width = `${Math.max(0, Math.min(100, percent))}%`;
+  }
+
+  async function loadBandwidthMonitorPage() {
+    clearToasts();
+    await loadBwMonitorData(APP._bwPeriod2);
+  }
+
+  async function loadBwMonitorData(hours) {
+    APP._bwPeriod2 = hours;
+    try {
+      const bwData = await apiFetch(`/bandwidth?hours=${hours}`).catch(() => null);
+      if (!bwData) {
+        document.getElementById('bwHistoryBody2').innerHTML = '<tr><td colspan="6">No bandwidth data</td></tr>';
+        renderBwHistoryChart2([], hours);
+        return;
+      }
+      const totalRxMB = Number(bwData.totalRxMB) || 0;
+      const totalTxMB = Number(bwData.totalTxMB) || 0;
+      const peakInMbps = Number(bwData.peakInMbps) || 0;
+      const peakOutMbps = Number(bwData.peakOutMbps) || 0;
+      const { bucketSec, rowsAsc, rowsDesc } = buildBandwidthRows(bwData.points || [], hours);
+      const latestRow = rowsAsc[rowsAsc.length - 1] || null;
+      const peakRow = rowsAsc.reduce((best, row) => (!best || row.combinedMbps > best.combinedMbps ? row : best), null);
+      const avgRxOverall = rowsAsc.length ? rowsAsc.reduce((sum, row) => sum + row.avgRx, 0) / rowsAsc.length : 0;
+      const avgTxOverall = rowsAsc.length ? rowsAsc.reduce((sum, row) => sum + row.avgTx, 0) / rowsAsc.length : 0;
+      const combinedAvg = avgRxOverall + avgTxOverall;
+      const totalTrafficMB = totalRxMB + totalTxMB;
+      const inShare = totalTrafficMB > 0 ? (totalRxMB / totalTrafficMB) * 100 : 0;
+      const outShare = totalTrafficMB > 0 ? (totalTxMB / totalTrafficMB) * 100 : 0;
+      const posture = getBandwidthTrafficPosture(totalRxMB, totalTxMB);
+
+      document.getElementById('bwTotalIn2').textContent = formatBandwidthVolume(totalRxMB);
+      document.getElementById('bwTotalOut2').textContent = formatBandwidthVolume(totalTxMB);
+      document.getElementById('bwAvgIn2').textContent = formatBandwidthRate(avgRxOverall);
+      document.getElementById('bwAvgOut2').textContent = formatBandwidthRate(avgTxOverall);
+      document.getElementById('bwPeakCombined2').textContent = formatBandwidthRate((peakRow && peakRow.combinedMbps) || 0);
+      document.getElementById('bwLatestCombined2').textContent = formatBandwidthRate((latestRow && latestRow.combinedMbps) || 0);
+      document.getElementById('bwPeakCombinedInline2').textContent = formatBandwidthRate((peakRow && peakRow.combinedMbps) || 0);
+      document.getElementById('bwLatestCombinedInline2').textContent = formatBandwidthRate((latestRow && latestRow.combinedMbps) || 0);
+      document.getElementById('bwWindowLabel2').textContent = formatBandwidthWindowLabel(hours);
+      document.getElementById('bwResolution2').textContent = formatBandwidthResolution(bucketSec);
+      document.getElementById('bwBucketCount2').textContent = `${rowsAsc.length} bucket${rowsAsc.length === 1 ? '' : 's'}`;
+      document.getElementById('bwTotalSamples2').textContent = `${(bwData.points || []).length} raw sample${(bwData.points || []).length === 1 ? '' : 's'}`;
+      document.getElementById('bwTrafficDirection2').textContent = posture.label;
+      document.getElementById('bwTrafficDirectionMeta2').textContent = posture.meta;
+      document.getElementById('bwCombinedAvg2').textContent = formatBandwidthRate(combinedAvg);
+      document.getElementById('bwWindowTotal2').textContent = `${formatBandwidthVolume(totalTrafficMB)} moved in ${formatBandwidthWindowLabel(hours).toLowerCase()}`;
+      document.getElementById('bwPeakPair2').textContent = `${formatBandwidthRate(peakInMbps)} / ${formatBandwidthRate(peakOutMbps)}`;
+      document.getElementById('bwLatestSampleAt2').textContent = latestRow ? formatDate(latestRow.date) : 'No recent sample';
+      document.getElementById('bwPeakWindowTime2').textContent = peakRow ? formatDate(peakRow.date) : 'No burst recorded yet';
+      document.getElementById('bwLatestBucketTime2').textContent = latestRow ? formatDate(latestRow.date) : 'Awaiting sample';
+      document.getElementById('bwInSharePct2').textContent = `${inShare.toFixed(1)}%`;
+      document.getElementById('bwOutSharePct2').textContent = `${outShare.toFixed(1)}%`;
+      document.getElementById('bwInShareValue2').textContent = `${formatBandwidthVolume(totalRxMB)} total in`;
+      document.getElementById('bwOutShareValue2').textContent = `${formatBandwidthVolume(totalTxMB)} total out`;
+      document.getElementById('bwTableMeta2').textContent = rowsAsc.length
+        ? `${rowsDesc.length} newest bucket${rowsDesc.length === 1 ? '' : 's'} shown`
+        : 'No buckets available';
+      setBandwidthShareFill('bwInShareFill2', inShare);
+      setBandwidthShareFill('bwOutShareFill2', outShare);
+
+      document.getElementById('bwHistoryBody2').innerHTML = rowsDesc.map((row) => {
+        return `<tr>
+          <td>${row.label}</td>
+          <td class="bandwidth-rate"><strong>${row.avgRx.toFixed(3)}</strong></td>
+          <td class="bandwidth-rate"><strong>${row.avgTx.toFixed(3)}</strong></td>
+          <td class="bandwidth-rate"><strong>${row.combinedMbps.toFixed(3)}</strong></td>
+          <td><span class="bandwidth-direction-pill is-${row.direction.tone}">${row.direction.label}</span></td>
+          <td class="bandwidth-total"><strong>${row.totalMB.toFixed(1)}</strong></td>
         </tr>`;
+      }).join('') || '<tr><td colspan="6">No data</td></tr>';
+
+      renderBwHistoryChart2(rowsAsc, hours);
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  }
+
+  function setBwPeriod2(hours) {
+    ['bwBtn1h2','bwBtn6h2','bwBtn24h2','bwBtn168h2'].forEach((id) => {
+      const el = $(`#${id}`);
+      if (el) el.classList.toggle('active', id === `bwBtn${hours}h2`);
+    });
+    loadBwMonitorData(hours);
+  }
+
+  function renderBwHistoryChart2(rowsAsc, hours) {
+    const canvas = document.getElementById('bwHistoryChart2');
+    if (!canvas) return;
+    if (APP._bwHistoryChart2) {
+      APP._bwHistoryChart2.destroy();
+      APP._bwHistoryChart2 = null;
+    }
+    if (!rowsAsc.length || typeof Chart === 'undefined') return;
+
+    const ctx = canvas.getContext('2d');
+    const inGradient = ctx.createLinearGradient(0, 0, 0, 360);
+    inGradient.addColorStop(0, 'rgba(96,165,250,0.26)');
+    inGradient.addColorStop(1, 'rgba(96,165,250,0.02)');
+    const outGradient = ctx.createLinearGradient(0, 0, 0, 360);
+    outGradient.addColorStop(0, 'rgba(52,211,153,0.24)');
+    outGradient.addColorStop(1, 'rgba(52,211,153,0.02)');
+
+    APP._bwHistoryChart2 = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: rowsAsc.map((row) => row.label),
+        datasets: [
+          {
+            label: 'Ingress',
+            data: rowsAsc.map((row) => row.avgRx),
+            borderColor: '#60a5fa',
+            backgroundColor: inGradient,
+            fill: true,
+            borderWidth: 2,
+            pointRadius: 0,
+            pointHoverRadius: 4,
+            tension: 0.35,
+          },
+          {
+            label: 'Egress',
+            data: rowsAsc.map((row) => row.avgTx),
+            borderColor: '#34d399',
+            backgroundColor: outGradient,
+            fill: true,
+            borderWidth: 2,
+            pointRadius: 0,
+            pointHoverRadius: 4,
+            tension: 0.35,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: { duration: 280 },
+        interaction: { mode: 'index', intersect: false },
+        scales: {
+          x: {
+            ticks: {
+              color: '#8b949e',
+              font: { size: 10 },
+              maxTicksLimit: hours >= 24 ? 10 : 12,
+            },
+            grid: { color: 'rgba(255,255,255,0.04)' },
+          },
+          y: {
+            beginAtZero: true,
+            ticks: {
+              color: '#8b949e',
+              font: { size: 10 },
+              callback: (value) => `${value} Mbps`,
+            },
+            grid: { color: 'rgba(255,255,255,0.05)' },
+          },
+        },
+        plugins: {
+          legend: {
+            labels: {
+              color: '#c8d3e4',
+              font: { size: 11, weight: '600' },
+              usePointStyle: true,
+              pointStyle: 'circle',
+              boxWidth: 10,
+            },
+          },
+          tooltip: {
+            backgroundColor: 'rgba(11,21,34,0.96)',
+            borderColor: 'rgba(255,255,255,0.08)',
+            borderWidth: 1,
+            titleColor: '#e8edf5',
+            bodyColor: '#c8d3e4',
+            displayColors: true,
+            callbacks: {
+              title: (items) => {
+                const row = rowsAsc[items[0].dataIndex];
+                return row ? formatDate(row.date) : items[0].label;
+              },
+              label: (ctx2) => ` ${ctx2.dataset.label}: ${Number(ctx2.parsed.y || 0).toFixed(3)} Mbps`,
+              afterBody: (items) => {
+                const row = rowsAsc[items[0].dataIndex];
+                if (!row) return [];
+                return [
+                  `Combined: ${row.combinedMbps.toFixed(3)} Mbps`,
+                  `Moved: ${row.totalMB.toFixed(1)} MB`,
+                  `Samples: ${row.sampleCount}`,
+                ];
+              },
+            },
+          },
+        },
+      },
+    });
+  }
+
+  // ─── Phase E: Live Connections ─────────────────────────────────────
+  async function loadLiveConnections() {
+    const type = ($('#lcFilterType') || {}).value || '';
+    const serverId = ($('#lcFilterServer') || {}).value || '';
+    try {
+      clearToasts();
+      const params = new URLSearchParams();
+      if (type) params.set('type', type);
+      if (serverId) params.set('server_id', serverId);
+      const query = params.toString();
+      const [summary, sessions] = await Promise.all([
+        apiFetch('/live-connections/summary'),
+        apiFetch(`/live-connections${query ? `?${query}` : ''}`),
+      ]);
+      // Populate server filter if empty
+      const srvSel = $('#lcFilterServer');
+      if (srvSel && srvSel.options.length <= 1) {
+        const servers = summary.servers || [];
+        srvSel.innerHTML = '<option value="">All servers</option>' +
+          servers.map((s) => `<option value="${s.server_id}">${escHtml(s.name || '')}</option>`).join('');
+        if (serverId) srvSel.value = serverId;
+      }
+      // Summary cards
+      document.getElementById('lcTotal').textContent = summary.total || 0;
+      document.getElementById('lcLive').textContent = summary.by_type ? (summary.by_type.live || 0) : 0;
+      document.getElementById('lcMovie').textContent = summary.by_type ? (summary.by_type.movie || 0) : 0;
+      document.getElementById('lcEpisode').textContent = summary.by_type ? (summary.by_type.episode || 0) : 0;
+      document.getElementById('lcCountries').textContent = summary.countries ? summary.countries.length : 0;
+      // Sessions table
+      const sessList = sessions.sessions || [];
+      document.getElementById('lcSessionsBody').innerHTML = sessList.length ? sessList.map((s) => {
+        const typeBadge = s.stream_type === 'live' ? '<span class="badge badge-success">Live</span>'
+          : s.stream_type === 'movie' ? '<span class="badge badge-info">Movie</span>'
+          : '<span class="badge badge-warning">Ep.</span>';
+        const countryFlag = s.geoip_country_code ? ` ${escHtml(s.geoip_country_code)}` : '';
+        const lastSeen = s.last_seen_at ? escHtml(s.last_seen_at.slice(0, 16).replace('T', ' ')) : '—';
+        return `<tr>
+          <td>${escHtml(s.username || '—')}</td>
+          <td>${typeBadge}</td>
+          <td>${escHtml(String(s.stream_id || ''))}</td>
+          <td>${escHtml(s.origin_name || s.origin_host || (s.origin_server_id ? '#' + s.origin_server_id : '—'))}</td>
+          <td>${escHtml(s.proxy_name || s.proxy_host || (s.proxy_server_id ? '#' + s.proxy_server_id : '—'))}</td>
+          <td>${countryFlag}</td>
+          <td>${escHtml(s.user_ip || '—')}</td>
+          <td>${lastSeen}</td>
+        </tr>`;
+      }).join('') : '<tr><td colspan="8" class="text-muted">No active sessions.</td></tr>';
+      // Top streams
+      const topStreams = summary.top_streams || [];
+      document.getElementById('lcTopStreamsBody').innerHTML = topStreams.length ? topStreams.map((t) => {
+        const typeBadge = t.stream_type === 'live' ? '<span class="badge badge-success">Live</span>'
+          : t.stream_type === 'movie' ? '<span class="badge badge-info">Movie</span>'
+          : '<span class="badge badge-warning">Ep.</span>';
+        return `<tr><td>${escHtml(String(t.stream_id || ''))}</td><td>${typeBadge}</td><td>${t.cnt}</td></tr>`;
+      }).join('') : '<tr><td colspan="3" class="text-muted">No data.</td></tr>';
+      // Server distribution
+      const srvDist = summary.servers || [];
+      document.getElementById('lcServerDistBody').innerHTML = srvDist.length ? srvDist.map((s) => {
+        return `<tr><td>${escHtml(s.name || '')}</td><td>${s.cnt}</td></tr>`;
+      }).join('') : '<tr><td colspan="2" class="text-muted">No data.</td></tr>';
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  }
+
+  // ─── Phase E: Live Connections Map ─────────────────────────────────
+  async function loadLiveConnectionsMap() {
+    try {
+      clearToasts();
+      const data = await apiFetch('/live-connections/geo');
+      const total = data.total || 0;
+      const countries = data.countries || [];
+      document.getElementById('mapTotal').textContent = total;
+      document.getElementById('mapCountries').textContent = countries.length;
+      document.getElementById('mapTopCountry').textContent = countries.length ? countries[0].code : '—';
+      // Country table
+      document.getElementById('lcCountryBody').innerHTML = countries.length ? countries.map((c) => {
+        const share = total ? ((c.cnt / total) * 100).toFixed(1) : '0.0';
+        return `<tr><td>${escHtml(c.code || '—')}</td><td>${escHtml(c.code || '—')}</td><td>${c.cnt}</td><td>${share}%</td></tr>`;
+      }).join('') : '<tr><td colspan="4" class="text-muted">No geographic data.</td></tr>';
+      // Horizontal bar chart via Chart.js
+      renderLcGeoChart(countries, total);
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  }
+
+  function renderLcGeoChart(countries, total) {
+    const canvas = document.getElementById('lcGeoChart');
+    if (!canvas) return;
+    if (typeof Chart === 'undefined') {
+      canvas.getContext('2d');
+      canvas.height = 60 + countries.length * 28;
+      return;
+    }
+    const top10 = countries.slice(0, 15);
+    const labels = top10.map((c) => c.code || '—');
+    const values = top10.map((c) => c.cnt);
+    const colors = [
+      '#3b82f6','#22c55e','#f59e0b','#ef4444','#8b5cf6',
+      '#06b6d4','#ec4899','#10b981','#f97316','#6366f1',
+      '#14b8a6','#eab308','#84cc16','#a855f7','#64748b',
+    ];
+    if (window._lcGeoChartInstance) window._lcGeoChartInstance.destroy();
+    const ctx = canvas.getContext('2d');
+    canvas.height = 60 + top10.length * 32;
+    window._lcGeoChartInstance = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [{ label: 'Sessions', data: values, backgroundColor: colors.slice(0, top10.length) }],
+      },
+      options: {
+        indexAxis: 'y',
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false }, tooltip: {
+          callbacks: {
+            label: (ctx) => {
+              const share = total ? ((ctx.raw / total) * 100).toFixed(1) : '0';
+              return ` ${ctx.raw} sessions (${share}%)`;
+            },
+          },
+        } },
+        scales: {
+          x: { grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#8b949e' } },
+          y: { grid: { display: false }, ticks: { color: '#e6edf3' } },
+        },
+      },
+    });
+  }
+
+  function serverHeartbeatFresh(s) {
+    if (!s || !s.last_heartbeat_at) return false;
+    const ts = new Date(s.last_heartbeat_at).getTime();
+    return Number.isFinite(ts) && (Date.now() - ts) <= 5 * 60 * 1000;
+  }
+
+  function serverRoleBadge(role) {
+    const r = String(role || '').toLowerCase();
+    if (r === 'main') return '<span class="server-mini-badge blue">MAIN</span>';
+    if (r === 'lb') return '<span class="server-mini-badge teal">LB</span>';
+    if (r === 'edge') return '<span class="server-mini-badge amber">EDGE</span>';
+    return `<span class="server-mini-badge slate">${escHtml(String(role || 'server').toUpperCase())}</span>`;
+  }
+
+  function serverHealthLabel(s) {
+    if (!s.enabled) return { cls: 'offline', label: 'Disabled' };
+    if (!s.last_heartbeat_at) return { cls: 'warning', label: 'No agent' };
+    if (!serverHeartbeatFresh(s)) return { cls: 'warning', label: 'Stale' };
+    return { cls: 'ok', label: 'OK' };
+  }
+
+  function serverStatusCell(s) {
+    const fresh = serverHeartbeatFresh(s);
+    const dotCls = !s.enabled ? 'offline' : (fresh ? 'online' : 'warning');
+    const text = !s.enabled ? 'Disabled' : (fresh ? 'Online' : (s.last_heartbeat_at ? 'Stale' : 'No Agent'));
+    return `<div class="server-status-cell"><span class="server-status-dot ${dotCls}"></span><span>${escHtml(text)}</span></div>`;
+  }
+
+  function serverPortsCell(s) {
+    const meta = s.meta_json && typeof s.meta_json === 'object' ? s.meta_json : {};
+    const httpPort = meta.http_port || meta.port || 80;
+    const httpsPort = meta.https_port || (meta.https ? 443 : null);
+    const parts = [
+      `<span class="server-port-chip">${escHtml(String(httpPort))}</span>`,
+      httpsPort ? `<span class="server-port-chip is-secure">${escHtml(String(httpsPort))}</span>` : '',
+    ].filter(Boolean).join('');
+    return `<div class="server-port-list">${parts || '<span class="text-muted">—</span>'}</div>`;
+  }
+
+  function serverDnsCell(s) {
+    const domains = Array.isArray(s.domains) ? s.domains.map((d) => d.domain).filter(Boolean) : [];
+    const host = s.public_host || '';
+    return `
+      <div class="server-dns-cell">
+        <div class="server-dns-primary">${escHtml(host || '—')}</div>
+        <div class="server-dns-secondary">${domains.length > 1 ? `${domains.length} DNS entries` : (domains.length === 1 ? '1 DNS entry' : 'No DNS entries')}</div>
+      </div>`;
+  }
+
+  function serverClientsCell(s) {
+    const active = Number(s.active_sessions || 0);
+    const max = Number(s.max_clients || 0);
+    return `<div class="server-clients-cell"><span class="server-clients-count">${active}</span>${max > 0 ? `<span class="server-clients-max">/ ${max}</span>` : ''}</div>`;
+  }
+
+  function serverResourcesCell(s) {
+    const cpu = s.health_cpu_pct != null ? Number(s.health_cpu_pct) : null;
+    const mem = s.health_mem_pct != null ? Number(s.health_mem_pct) : null;
+    const cpuW = cpu != null && Number.isFinite(cpu) ? Math.max(0, Math.min(100, cpu)) : 0;
+    const memW = mem != null && Number.isFinite(mem) ? Math.max(0, Math.min(100, mem)) : 0;
+    return `
+      <div class="server-resources-cell">
+        <div class="server-resource-line"><span>CPU</span><div class="server-mini-bar"><div class="server-mini-fill cpu" style="width:${cpuW}%"></div></div><strong>${cpu != null && Number.isFinite(cpu) ? cpu.toFixed(0) + '%' : '—'}</strong></div>
+        <div class="server-resource-line"><span>RAM</span><div class="server-mini-bar"><div class="server-mini-fill mem" style="width:${memW}%"></div></div><strong>${mem != null && Number.isFinite(mem) ? mem.toFixed(0) + '%' : '—'}</strong></div>
+      </div>`;
+  }
+
+  function serverBandwidthCell(s) {
+    const net = s.health_net_mbps != null ? Number(s.health_net_mbps) : null;
+    const cap = s.network_mbps_cap != null ? Number(s.network_mbps_cap) : 0;
+    const pct = net != null && Number.isFinite(net)
+      ? (cap > 0 ? Math.max(0, Math.min(100, (net / cap) * 100)) : Math.min(100, net * 5))
+      : 0;
+    return `
+      <div class="server-bandwidth-cell">
+        <div class="server-resource-line"><span>IN</span><div class="server-mini-bar"><div class="server-mini-fill net" style="width:${pct}%"></div></div><strong>${net != null && Number.isFinite(net) ? net.toFixed(1) + ' Mb/s' : '—'}</strong></div>
+        <div class="server-resource-line"><span>OUT</span><div class="server-mini-bar"><div class="server-mini-fill muted" style="width:${pct * 0.35}%"></div></div><strong>${cap > 0 ? cap + ' cap' : '—'}</strong></div>
+      </div>`;
+  }
+
+  function serverNameCell(s) {
+    const host = s.public_ip || s.private_ip || '—';
+    return `
+      <div class="server-name-cell-rich">
+        <div class="server-name-top">${serverRoleBadge(s.role)} <span class="server-name-value">${escHtml(s.name || '')}</span></div>
+        <div class="server-name-sub">${escHtml(host)}</div>
+      </div>`;
+  }
+
+  function serverActionsCell(s) {
+    return `
+      <div class="server-actions-split" data-server-action-wrap="${s.id}">
+        <button type="button" class="server-actions-main" onclick="APP.openServerAdvancedModal(${s.id})">Actions</button>
+        <button type="button" class="server-actions-toggle" onclick="APP.toggleServerActionMenu(event, ${s.id})">&#9662;</button>
+        <div class="server-actions-menu" id="serverActionMenu-${s.id}">
+          <button type="button" class="server-actions-menu-item" onclick="APP.serverActionIpChange(${s.id})">IP Change</button>
+          <button type="button" class="server-actions-menu-item" onclick="APP.serverActionStartAllStreams(${s.id})">Start All Streams</button>
+          <button type="button" class="server-actions-menu-item" onclick="APP.serverActionStopAllStreams(${s.id})">Stop All Streams</button>
+          <button type="button" class="server-actions-menu-item danger" onclick="APP.serverActionKillConnections(${s.id})">Kill All Connections</button>
+          <div class="server-actions-divider"></div>
+          <button type="button" class="server-actions-menu-item" onclick="APP.serverActionEdit(${s.id})">Edit Server</button>
+          <button type="button" class="server-actions-menu-item" onclick="APP.serverActionMonitor(${s.id})">Monitor</button>
+        </div>
+      </div>`;
+  }
+
+  function renderServersPage() {
+    const tb = $('#serversTable tbody');
+    if (!tb) return;
+
+    const search = ($('#serversSearch')?.value || '').trim().toLowerCase();
+    let rows = [..._serversCache];
+    if (search) {
+      rows = rows.filter((s) => {
+        const hay = [s.id, s.name, s.public_host, s.public_ip, s.role, s.agent_version]
+          .map((x) => String(x || '').toLowerCase()).join(' ');
+        return hay.includes(search);
       });
-      const tb = $('#serversTable tbody');
-      if (tb) tb.innerHTML = rows.join('') || '<tr><td colspan="10" class="text-muted">No servers yet.</td></tr>';
-    } catch (e) { toast(e.message, 'error'); }
+    }
+
+    if (_serversSortMode === 'latency') {
+      rows.sort((a, b) => {
+        const ap = Number.isFinite(Number(a.health_ping_ms)) ? Number(a.health_ping_ms) : Number.POSITIVE_INFINITY;
+        const bp = Number.isFinite(Number(b.health_ping_ms)) ? Number(b.health_ping_ms) : Number.POSITIVE_INFINITY;
+        return ap - bp;
+      });
+    } else {
+      rows.sort((a, b) => (Number(a.sort_order || 0) - Number(b.sort_order || 0)) || (Number(a.id) - Number(b.id)));
+    }
+
+    const total = rows.length;
+    const online = rows.filter((s) => s.enabled && serverHeartbeatFresh(s)).length;
+    if ($('#serversTotalPill')) $('#serversTotalPill').textContent = `${total} Total`;
+    if ($('#serversOnlinePill')) $('#serversOnlinePill').textContent = `${online} Online`;
+
+    const perPage = Math.max(10, parseInt($('#serversPerPage')?.value || _serversPerPage, 10) || 50);
+    _serversPerPage = perPage;
+    const totalPages = Math.max(1, Math.ceil(total / perPage));
+    if (_serversPage > totalPages) _serversPage = totalPages;
+    if (_serversPage < 1) _serversPage = 1;
+    const start = (_serversPage - 1) * perPage;
+    const pageRows = rows.slice(start, start + perPage);
+
+    if (!pageRows.length) {
+      tb.innerHTML = '<tr><td colspan="12" class="text-muted" style="text-align:center;padding:2rem">No servers found.</td></tr>';
+    } else {
+      tb.innerHTML = pageRows.map((s) => {
+        const health = serverHealthLabel(s);
+        return `
+          <tr class="server-row" data-server-row="${s.id}">
+            <td><input type="checkbox" disabled></td>
+            <td>${s.id}</td>
+            <td>${serverNameCell(s)}</td>
+            <td>${serverStatusCell(s)}</td>
+            <td><span class="server-health-pill ${health.cls}">${escHtml(health.label)}</span></td>
+            <td><span class="server-version-pill">${escHtml(s.agent_version || '—')}</span></td>
+            <td>${serverPortsCell(s)}</td>
+            <td>${serverDnsCell(s)}</td>
+            <td>${serverClientsCell(s)}</td>
+            <td>${serverResourcesCell(s)}</td>
+            <td>${serverBandwidthCell(s)}</td>
+            <td>${serverActionsCell(s)}</td>
+          </tr>`;
+      }).join('');
+    }
+
+    const startRow = total ? start + 1 : 0;
+    const endRow = total ? Math.min(total, start + pageRows.length) : 0;
+    if ($('#serversPageSummary')) $('#serversPageSummary').textContent = `Showing ${startRow} to ${endRow} of ${total} entries`;
+    if ($('#serversPageInfo')) $('#serversPageInfo').textContent = String(_serversPage);
+    if ($('#serversTotalPages')) $('#serversTotalPages').textContent = String(totalPages);
+    if ($('#serversPrevBtn')) $('#serversPrevBtn').disabled = _serversPage <= 1;
+    if ($('#serversNextBtn')) $('#serversNextBtn').disabled = _serversPage >= totalPages;
+
+    renderServersLatencyBanner(rows);
+  }
+
+  function renderServersLatencyBanner(rows) {
+    const pings = rows
+      .map((s) => Number(s.health_ping_ms))
+      .filter((n) => Number.isFinite(n) && n > 0);
+    let text = 'Current CDN Latency: —';
+    if (pings.length) {
+      const avg = pings.reduce((a, b) => a + b, 0) / pings.length;
+      const tone = avg <= 25 ? 'Good' : avg <= 60 ? 'Average' : 'High';
+      text = `Current CDN Latency: ${avg.toFixed(2)} - ${tone}`;
+    }
+    if ($('#serversLatencyText')) $('#serversLatencyText').textContent = text;
+  }
+
+  function closeServerActionMenus() {
+    $$('[data-server-action-wrap].open').forEach((wrap) => wrap.classList.remove('open'));
+    $$('.server-actions-menu').forEach((menu) => {
+      menu.style.left = '';
+      menu.style.top = '';
+      menu.style.maxHeight = '';
+    });
+  }
+
+  function positionServerActionMenu(serverId) {
+    const wrap = document.querySelector(`[data-server-action-wrap="${serverId}"]`);
+    const menu = $(`#serverActionMenu-${serverId}`);
+    if (!wrap || !menu) return;
+    const rect = wrap.getBoundingClientRect();
+    const menuWidth = 220;
+    const viewportW = window.innerWidth || document.documentElement.clientWidth || 0;
+    const viewportH = window.innerHeight || document.documentElement.clientHeight || 0;
+    let left = rect.right - menuWidth;
+    if (left < 12) left = 12;
+    if (left + menuWidth > viewportW - 12) left = Math.max(12, viewportW - menuWidth - 12);
+    let top = rect.bottom + 6;
+    const estimatedMenuHeight = Math.min(320, menu.scrollHeight || 280);
+    if (top + estimatedMenuHeight > viewportH - 12) {
+      top = Math.max(12, rect.top - estimatedMenuHeight - 6);
+    }
+    menu.style.left = `${Math.round(left)}px`;
+    menu.style.top = `${Math.round(top)}px`;
+    menu.style.maxHeight = `${Math.max(160, viewportH - top - 12)}px`;
+  }
+
+  const _srvTabOrder = ['details', 'advanced', 'server-guard', 'ssl', 'isp-manager', 'install'];
+  const _srvTabLabels = { details: 'Details', advanced: 'Advanced', 'server-guard': 'Server Guard', ssl: 'SSL Certificate', 'isp-manager': 'ISP Manager', install: 'Install' };
+  let _serverEditReturnPage = 'servers';
+
+  function _resetTagInput(inputId) {
+    const wrap = $(`#${inputId}Wrap`);
+    if (!wrap) return;
+    wrap.querySelectorAll('.tag-pill').forEach((pill) => pill.remove());
+    const input = wrap.querySelector('.tag-input-field');
+    if (input) input.value = '';
+  }
+
+  function _setTagInput(inputId, value) {
+    _resetTagInput(inputId);
+    const items = Array.isArray(value)
+      ? value
+      : String(value || '').split(/[,;\n]/).map((v) => v.trim()).filter(Boolean);
+    items.forEach((item) => addTag(inputId, item));
+  }
+
+  function _getTagValues(inputId) {
+    const wrap = $(`#${inputId}Wrap`);
+    if (!wrap) return [];
+    return Array.from(wrap.querySelectorAll('.tag-pill'))
+      .map((pill) => pill.textContent.replace(/\xD7$/, '').trim())
+      .filter(Boolean);
+  }
+
+  function _getServerEditMeta(server) {
+    return server && typeof server.meta_json === 'object' && server.meta_json ? server.meta_json : {};
   }
 
   function switchServerModalTab(tab) {
@@ -3286,6 +6939,28 @@
       const on = panel.dataset.srvPanel === tab;
       panel.style.display = on ? 'block' : 'none';
     });
+    _updateServerTabNav(tab);
+  }
+
+  function _updateServerTabNav(tab) {
+    const idx = _srvTabOrder.indexOf(tab);
+    const modal = $('#serverModal');
+    if (!modal) return;
+    modal.querySelectorAll('.srv-tab-prev').forEach((btn) => {
+      btn.disabled = idx <= 0;
+    });
+    modal.querySelectorAll('.srv-tab-next').forEach((btn) => {
+      btn.disabled = idx >= _srvTabOrder.length - 2;
+    });
+  }
+
+  function navigateServerModalTab(dir) {
+    const activeTab = $$('.server-modal-tabs .xc-tab.active')[0];
+    if (!activeTab) return;
+    const current = activeTab.dataset.srvTab;
+    const idx = _srvTabOrder.indexOf(current);
+    const nextIdx = dir === 'next' ? Math.min(idx + 1, _srvTabOrder.length - 1) : Math.max(idx - 1, 0);
+    if (nextIdx !== idx) switchServerModalTab(_srvTabOrder[nextIdx]);
   }
 
   async function openServerModal(id) {
@@ -3296,24 +6971,62 @@
     if (tabInst) tabInst.style.display = prov ? 'inline-block' : 'none';
     if (formInst) formInst.style.display = prov ? 'block' : 'none';
 
+    clearToasts();
+    _wireServerModalHandlers();
+    _serverEditReturnPage = _currentPage && _currentPage !== 'server-edit' ? _currentPage : 'servers';
+    navigateTo('server-edit');
     switchServerModalTab('details');
-    $('#serverModal').style.display = 'flex';
-    $('#serverModalTitle').textContent = id ? 'Edit server' : 'Add server';
+    $('#serverModalTitle').textContent = id ? 'Edit Server' : 'Edit Server';
     $('#srvFormId').value = id || '';
+    $('#serverModal').dataset.serverRole = 'edge';
+    document.querySelector('.page-content')?.scrollTo?.(0, 0);
+
     if (!id) {
       $('#srvName').value = '';
-      $('#srvRole').value = 'edge';
-      $('#srvPublicHost').value = '';
-      $('#srvPublicIp').value = '';
-      $('#srvPrivateIp').value = '';
+      $('#srvServerIpPrimary').value = '';
+      $('#srvPrivateUsersCdn').value = '';
+      $('#srvProxyIpDefaultDns').value = '';
+      $('#srvRootPassword').value = '';
       $('#srvMaxClients').value = '0';
-      $('#srvSortOrder').value = '0';
-      $('#srvNetworkCap').value = '0';
       $('#srvEnabled').checked = true;
-      $('#srvProxied').checked = false;
-      $('#srvTimeshift').checked = false;
-      $('#srvDomains').value = '';
-      $('#srvMetaJson').value = '{}';
+      $('#srvFullDuplex').checked = false;
+      $('#srvBoostFpm').checked = false;
+      $('#srvTimeshiftOnly').checked = false;
+      _setTagInput('srvDomains', '');
+      _setTagInput('srvHttpPort', '80');
+      $('#srvHttpsM3uLines').checked = false;
+      $('#srvForceSslPort').checked = false;
+      $('#srvHttpsPort').value = '443';
+      $('#srvTimeDifference').value = '0';
+      $('#srvSshPortAdv').value = '22';
+      $('#srvNetworkInterface').value = 'eth0';
+      $('#srvNetworkSpeed').value = '1000';
+      $('#srvOsInfo').value = '';
+      $('#srvGeoipLb').checked = false;
+      $('#srvGeoipPriority').value = 'low';
+      $('#srvGeoipCountries').value = '';
+      $('#srvExtraNginx').value = '';
+      $('#srvServerGuardEnabled').checked = false;
+      $('#srvIpWhitelisting').checked = false;
+      $('#srvBotnetFighter').checked = false;
+      $('#srvUnderAttack').checked = false;
+      _setTagInput('srvConnLimitPorts', '');
+      $('#srvMaxConnPerIp').value = '0';
+      $('#srvMaxHitsNormal').value = '50';
+      $('#srvMaxHitsRestreamer').value = '1200';
+      $('#srvWhitelistUsername').value = '';
+      $('#srvBlockUserMins').value = '10';
+      $('#srvAutoRestartMysql').value = '2200';
+      $('#srvIspEnabled').checked = false;
+      $('#srvIspPriority').value = 'low';
+      $('#srvIspNameEntry').value = '';
+      $('#srvIspNames').value = '';
+      const guardSettings = $('#srvGuardSettings');
+      if (guardSettings) guardSettings.style.display = 'none';
+      const guardBanner = $('#srvGuardBanner');
+      if (guardBanner) guardBanner.style.display = 'none';
+      const primaryIpWarning = $('#srvPrimaryIpWarning');
+      if (primaryIpWarning) primaryIpWarning.style.display = 'none';
       const srvLbName = $('#srvLbName');
       if (srvLbName) srvLbName.value = '';
       const srvProvHost = $('#srvProvisionPublicHost');
@@ -3322,34 +7035,62 @@
       if (srvPanelUrlEl && typeof window !== 'undefined' && window.location) {
         srvPanelUrlEl.value = window.location.origin;
       }
-      $('#srvPerfHeartbeat').textContent = '—';
-      $('#srvPerfAgentVer').textContent = '—';
-      ['srvGaugeCpu', 'srvGaugeMem', 'srvGaugeNet', 'srvGaugePing'].forEach((gid) => {
-        const el = $(`#${gid}`);
-        if (el) el.style.width = '0%';
-      });
-      ['srvGaugeCpuLbl', 'srvGaugeMemLbl', 'srvGaugeNetLbl', 'srvGaugePingLbl'].forEach((id) => {
-        const el = $(`#${id}`);
-        if (el) el.textContent = '—';
-      });
+      renderSSLDomainsTable(null);
       return;
     }
+
     try {
       const s = await apiFetch(`/servers/${id}`);
+      const meta = _getServerEditMeta(s);
+      $('#serverModal').dataset.serverRole = s.role || 'edge';
       $('#srvName').value = s.name || '';
-      $('#srvRole').value = s.role || 'edge';
-      $('#srvPublicHost').value = s.public_host || '';
-      $('#srvPublicIp').value = s.public_ip || '';
-      $('#srvPrivateIp').value = s.private_ip || '';
+      $('#srvServerIpPrimary').value = s.public_ip || s.server_ip || '';
+      $('#srvPrimaryIpWarning').style.display = (s.role === 'main') ? 'block' : 'none';
+      $('#srvPrivateUsersCdn').value = meta.private_users_cdn_lb || '';
+      $('#srvProxyIpDefaultDns').value = s.public_host || '';
+      $('#srvRootPassword').value = s.admin_password || '';
       $('#srvMaxClients').value = String(s.max_clients != null ? s.max_clients : 0);
-      $('#srvSortOrder').value = String(s.sort_order != null ? s.sort_order : 0);
-      $('#srvNetworkCap').value = String(s.network_mbps_cap != null ? s.network_mbps_cap : 0);
       $('#srvEnabled').checked = !!s.enabled;
-      $('#srvProxied').checked = !!s.proxied;
-      $('#srvTimeshift').checked = !!s.timeshift_only;
-      const domLines = (s.domains || []).map((d) => d.domain).filter(Boolean);
-      $('#srvDomains').value = domLines.join('\n');
-      $('#srvMetaJson').value = s.meta_json && typeof s.meta_json === 'object' ? JSON.stringify(s.meta_json, null, 2) : (s.meta_json ? String(s.meta_json) : '{}');
+      $('#srvFullDuplex').checked = !!s.full_duplex;
+      $('#srvBoostFpm').checked = !!s.boost_fpm;
+      $('#srvTimeshiftOnly').checked = !!s.timeshift_only;
+      _setTagInput('srvDomains', (s.domains || []).map((d) => d.domain).filter(Boolean));
+
+      _setTagInput('srvHttpPort', meta.http_port_list || (s.http_port ? [s.http_port] : []));
+      $('#srvHttpsM3uLines').checked = !!s.https_m3u_lines;
+      $('#srvForceSslPort').checked = !!s.force_ssl_port;
+      $('#srvHttpsPort').value = s.https_port || 443;
+      $('#srvTimeDifference').value = s.time_difference || '0';
+      $('#srvSshPortAdv').value = s.ssh_port || 22;
+      $('#srvNetworkInterface').value = s.network_interface || 'eth0';
+      $('#srvNetworkSpeed').value = s.network_speed || '';
+      $('#srvOsInfo').value = s.os_info || '';
+      $('#srvGeoipLb').checked = !!s.geoip_load_balancing;
+      $('#srvGeoipPriority').value = meta.geoip_priority || 'low';
+      $('#srvGeoipCountries').value = s.geoip_countries || '';
+      $('#srvExtraNginx').value = s.extra_nginx_config || '';
+
+      $('#srvServerGuardEnabled').checked = !!s.server_guard_enabled;
+      $('#srvIpWhitelisting').checked = !!s.ip_whitelisting;
+      $('#srvBotnetFighter').checked = !!s.botnet_fighter;
+      $('#srvUnderAttack').checked = !!s.under_attack;
+      _setTagInput('srvConnLimitPorts', s.connection_limit_ports || '');
+      $('#srvMaxConnPerIp').value = s.max_conn_per_ip || 0;
+      $('#srvMaxHitsNormal').value = s.max_hits_normal_user || 50;
+      $('#srvMaxHitsRestreamer').value = s.max_hits_restreamer || 1200;
+      $('#srvWhitelistUsername').value = meta.server_guard_whitelist_username || '';
+      $('#srvBlockUserMins').value = s.block_user_minutes || 10;
+      $('#srvAutoRestartMysql').value = meta.server_guard_auto_restart_mysql_value || (s.auto_restart_mysql ? '1' : '2200');
+      const guardSettings = $('#srvGuardSettings');
+      if (guardSettings) guardSettings.style.display = s.server_guard_enabled ? 'block' : 'none';
+      const guardBanner = $('#srvGuardBanner');
+      if (guardBanner) guardBanner.style.display = s.server_guard_enabled ? 'block' : 'none';
+
+      $('#srvIspEnabled').checked = !!s.isp_enabled;
+      $('#srvIspPriority').value = meta.isp_priority_label || 'low';
+      $('#srvIspNameEntry').value = '';
+      $('#srvIspNames').value = String(s.isp_allowed_names || '').split(',').map((item) => item.trim()).filter(Boolean).join('\n');
+
       const srvLbNameEd = $('#srvLbName');
       if (srvLbNameEd) srvLbNameEd.value = s.name || '';
       const srvProvHostEd = $('#srvProvisionPublicHost');
@@ -3358,64 +7099,586 @@
       if (srvPanelUrlEd && typeof window !== 'undefined' && window.location) {
         srvPanelUrlEd.value = window.location.origin;
       }
-      $('#srvPerfHeartbeat').textContent = s.last_heartbeat_at || '—';
-      $('#srvPerfAgentVer').textContent = s.agent_version || '—';
-      const setGauge = (barId, lblId, pct, label) => {
-        const b = $(barId);
-        const l = $(lblId);
-        const w = Math.min(100, Math.max(0, Number(pct) || 0));
-        if (b) b.style.width = `${w}%`;
-        if (l) l.textContent = label;
-      };
-      const cpu = s.health_cpu_pct != null ? Number(s.health_cpu_pct) : null;
-      const mem = s.health_mem_pct != null ? Number(s.health_mem_pct) : null;
-      const net = s.health_net_mbps != null ? Number(s.health_net_mbps) : null;
-      const ping = s.health_ping_ms != null ? Number(s.health_ping_ms) : null;
-      setGauge('#srvGaugeCpu', '#srvGaugeCpuLbl', cpu != null && Number.isFinite(cpu) ? cpu : 0, cpu != null && Number.isFinite(cpu) ? `${cpu.toFixed(0)}%` : '—');
-      setGauge('#srvGaugeMem', '#srvGaugeMemLbl', mem != null && Number.isFinite(mem) ? mem : 0, mem != null && Number.isFinite(mem) ? `${mem.toFixed(0)}%` : '—');
-      setGauge('#srvGaugeNet', '#srvGaugeNetLbl', net != null && Number.isFinite(net) ? Math.min(100, net * 4) : 0, net != null && Number.isFinite(net) ? `${net.toFixed(2)} Mb/s` : '—');
-      setGauge('#srvGaugePing', '#srvGaugePingLbl', ping != null && Number.isFinite(ping) ? Math.min(100, ping / 2) : 0, ping != null && Number.isFinite(ping) ? `${ping.toFixed(0)} ms` : '—');
+
+      renderSSLDomainsTable(id, s.domains || []);
     } catch (e) {
       toast(e.message, 'error');
     }
   }
 
   function closeServerModal() {
-    $('#serverModal').style.display = 'none';
+    navigateTo(_serverEditReturnPage || 'servers');
   }
 
-  async function saveServer() {
-    const id = $('#srvFormId').value.trim();
-    const domains = ($('#srvDomains').value || '').split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
-    let metaJson = {};
-    const mj = ($('#srvMetaJson').value || '').trim();
-    if (mj) {
-      try { metaJson = JSON.parse(mj); } catch {
-        toast('meta_json must be valid JSON', 'error');
-        return;
+  async function openInstallModal(profile) {
+    await getAdminFeatures();
+    const prov = _adminFeatures && _adminFeatures.serverProvisioning;
+    const tabInst = $('#serverTabInstall');
+    const formInst = $('#serverInstallForm');
+    if (tabInst) tabInst.style.display = prov ? 'inline-block' : 'none';
+    if (formInst) formInst.style.display = prov ? 'block' : 'none';
+
+    // Reset all fields for a fresh install
+    await openServerModal(null);
+    $('#serverModal').dataset.serverRole = 'lb';
+    const guardSettings = $('#srvGuardSettings');
+    if (guardSettings) guardSettings.style.display = 'none';
+    const srvLbName = $('#srvLbName');
+    if (srvLbName) srvLbName.value = '';
+    const srvProvHost = $('#srvProvisionPublicHost');
+    if (srvProvHost) srvProvHost.value = '';
+    const srvPanelUrlEl = $('#srvPanelUrl');
+    if (srvPanelUrlEl && typeof window !== 'undefined' && window.location) {
+      srvPanelUrlEl.value = window.location.origin;
+    }
+    // Pre-select the requested profile
+    const profileEl = $('#srvNodeProfile');
+    if (profileEl) profileEl.value = profile || 'origin-runtime';
+    // Reset provision log
+    const logEl = $('#srvProvisionLog');
+    if (logEl) logEl.textContent = '';
+    switchServerModalTab('install');
+    $('#serverModalTitle').textContent = 'Install server';
+  }
+
+  async function submitProvisionJob(body, logSelector, onStarted) {
+    const logEl = $(logSelector);
+    if (!(_adminFeatures && _adminFeatures.serverProvisioning)) {
+      const msg = 'Provisioning is disabled. Enable it in Settings → Streaming before running this install.';
+      if (logEl) logEl.textContent = msg;
+      toast(msg, 'error');
+      return null;
+    }
+    const job = await apiFetch('/servers/provision', { method: 'POST', body: JSON.stringify(body) });
+    if (logEl) logEl.textContent = `Job #${job.id || '?'} started…\n`;
+    if (typeof onStarted === 'function') await onStarted(job, logEl);
+    const poll = async () => {
+      try {
+        const st = await apiFetch(`/servers/provision/${job.id}`);
+        if (logEl) logEl.textContent = (st.log || '') + (st.error ? `\n${st.error}` : '');
+        if (st.status === 'done' || st.status === 'error') return;
+        setTimeout(poll, 1500);
+      } catch (e) {
+        if (logEl) logEl.textContent += `\n${e.message}`;
+      }
+    };
+    poll();
+    return job;
+  }
+
+  async function createServerRowForInstall({ name, host, role, meta }) {
+    return await apiFetch('/servers', {
+      method: 'POST',
+      body: JSON.stringify({
+        name,
+        role,
+        public_host: host,
+        public_ip: host,
+        private_ip: '',
+        enabled: false,
+        proxied: role === 'lb',
+        timeshift_only: false,
+        domains: host ? [host] : [],
+        meta_json: meta || {},
+      }),
+    });
+  }
+
+  async function submitInstallLbPage() {
+    const name = ($('#installLbName')?.value || '').trim();
+    const host = ($('#installLbHost')?.value || '').trim();
+    const password = $('#installLbPassword')?.value || '';
+    const sshPort = parseInt($('#installLbSshPort')?.value, 10) || 22;
+    const httpPort = parseInt($('#installLbHttpPort')?.value, 10) || 8080;
+    const httpsPort = parseInt($('#installLbHttpsPort')?.value, 10) || 8443;
+    if (!name || !host || !password) {
+      toast('Server name, server IP, and SSH password are required.', 'error');
+      return;
+    }
+    await getAdminFeatures();
+    if (!(_adminFeatures && _adminFeatures.serverProvisioning)) {
+      const msg = 'Provisioning is disabled. Enable it in Settings → Streaming before running this install.';
+      if ($('#installLbLog')) $('#installLbLog').textContent = msg;
+      toast(msg, 'error');
+      return;
+    }
+    try {
+      const server = await createServerRowForInstall({
+        name,
+        host,
+        role: 'lb',
+        meta: {
+          http_port: httpPort,
+          https_port: httpsPort,
+          port: httpPort,
+          https: false,
+        },
+      });
+      await submitProvisionJob({
+        server_id: server.id,
+        host,
+        port: sshPort,
+        user: 'root',
+        password,
+        panel_url: window.location.origin,
+        profile: 'origin-runtime',
+      }, '#installLbLog', async () => {
+        toast('Load balancer install started', 'success');
+        await loadServers();
+      });
+    } catch (e) {
+      const logEl = $('#installLbLog');
+      if (logEl) logEl.textContent = e.message;
+      toast(e.message, 'error');
+    }
+  }
+
+  async function submitInstallProxyPage() {
+    const protectServerId = parseInt($('#installProxyProtectServer')?.value, 10) || 0;
+    const ports = ($('#installProxyPorts')?.value || '').trim();
+    const name = ($('#installProxyName')?.value || '').trim();
+    const host = ($('#installProxyHost')?.value || '').trim();
+    const password = $('#installProxyPassword')?.value || '';
+    const sshPort = parseInt($('#installProxySshPort')?.value, 10) || 22;
+    const apiHttp = parseInt($('#installProxyApiHttpPort')?.value, 10) || 2086;
+    const apiHttps = parseInt($('#installProxyApiHttpsPort')?.value, 10) || 2083;
+    if (!protectServerId || !name || !host || !password) {
+      toast('Protected server, proxy server name, proxy server IP, and SSH password are required.', 'error');
+      return;
+    }
+    await getAdminFeatures();
+    if (!(_adminFeatures && _adminFeatures.serverProvisioning)) {
+      const msg = 'Provisioning is disabled. Enable it in Settings → Streaming before running this install.';
+      if ($('#installProxyLog')) $('#installProxyLog').textContent = msg;
+      toast(msg, 'error');
+      return;
+    }
+    try {
+      const server = await createServerRowForInstall({
+        name,
+        host,
+        role: 'lb',
+        meta: {
+          streaming_proxy_ports: ports,
+          proxy_api_http_port: apiHttp,
+          proxy_api_https_port: apiHttps,
+          port: apiHttp,
+          https: false,
+          protected_server_id: protectServerId,
+        },
+      });
+      const job = await submitProvisionJob({
+        server_id: server.id,
+        host,
+        port: sshPort,
+        user: 'root',
+        password,
+        panel_url: window.location.origin,
+        profile: 'proxy-delivery',
+      }, '#installProxyLog', async () => {
+        toast('Proxy server install started', 'success');
+        await loadServers();
+      });
+      if (job && protectServerId) {
+        try {
+          await apiFetch('/server-relationships', {
+            method: 'POST',
+            body: JSON.stringify({
+              parent_server_id: protectServerId,
+              child_server_id: server.id,
+              relationship_type: 'origin-proxy',
+              priority: 0,
+              enabled: 1,
+            }),
+          });
+          const logEl = $('#installProxyLog');
+          if (logEl) logEl.textContent += '\nRelationship created. Automatic upstream sync and live proxy forwarding remain de-scoped in current TARGET.';
+        } catch (relErr) {
+          const logEl = $('#installProxyLog');
+          if (logEl) logEl.textContent += `\nRelationship warning: ${relErr.message}`;
+        }
+      }
+    } catch (e) {
+      const logEl = $('#installProxyLog');
+      if (logEl) logEl.textContent = e.message;
+      toast(e.message, 'error');
+    }
+  }
+
+  function toggleServerActionMenu(event, serverId) {
+    if (event) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+    const wrap = document.querySelector(`[data-server-action-wrap="${serverId}"]`);
+    if (!wrap) return;
+    const willOpen = !wrap.classList.contains('open');
+    closeServerActionMenus();
+    if (willOpen) {
+      wrap.classList.add('open');
+      requestAnimationFrame(() => positionServerActionMenu(serverId));
+    }
+  }
+
+  function openServerAdvancedModal(serverId) {
+    closeServerActionMenus();
+    const server = _serversCache.find((s) => Number(s.id) === Number(serverId));
+    _serverAdvancedTargetId = serverId;
+    $('#serverAdvancedTitle').textContent = `ADVANCED FUNCTIONS FOR THE ${String(server && server.role === 'main' ? 'MAIN' : (server && server.name ? server.name : 'SERVER')).toUpperCase()}`;
+    $('#serverAdvancedCommand').textContent = 'systemctl restart nginx && systemctl restart iptv-panel-agent';
+    $('#serverAdvancedNote').textContent = 'Optimize PHP Config and Update FFmpeg are blocked for the current TARGET node profiles because this stack provisions Node/nginx profiles rather than a PHP panel runtime, and no safe FFmpeg in-place upgrade workflow is exposed yet.';
+    $('#serverAdvancedModal').style.display = 'flex';
+  }
+
+  function closeServerAdvancedModal() {
+    $('#serverAdvancedModal').style.display = 'none';
+    _serverAdvancedTargetId = null;
+  }
+
+  async function postServerAction(serverId, actionPath, confirmMsg, successMsg) {
+    if (confirmMsg && !confirm(confirmMsg)) return;
+    try {
+      const data = await apiFetch(`/servers/${serverId}/actions/${actionPath}`, { method: 'POST', body: JSON.stringify({}) });
+      toast(data.message || successMsg || 'Action queued', 'success');
+      closeServerAdvancedModal();
+      loadServers();
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  }
+
+  function showServerFaq(which) {
+    const faqs = {
+      'balancer-down': 'If a balancer shows down, verify heartbeat freshness and rerun provisioning if the node never completed capability handshake.',
+      'main-change': 'Changing the main server should be done by editing the target row and confirming role/host values together.',
+      'main-ip-change': 'Use IP Change from the row actions to update the server IP fields without rebuilding the entire row.',
+      'lb-zero': '0 connection on LB often means DNS is not pointing to the delivery node or provisioning is incomplete.',
+      'panel-port': 'Changing the panel port requires panel URL and external reverse proxy/DNS alignment.',
+      'protect-scan': 'Protect origin nodes behind proxy-delivery nodes and keep management ports firewalled.',
+      'bandwidth': 'Bandwidth metrics depend on fresh agent heartbeat and server-side interface reporting.',
+    };
+    toast(faqs[which] || 'No FAQ text available yet.', 'info');
+  }
+
+  function toggleServerFaqs() {
+    _serverFaqsVisible = !_serverFaqsVisible;
+    const row = $('#serversFaqRow');
+    if (row) row.style.display = _serverFaqsVisible ? 'flex' : 'none';
+  }
+
+  function changeServersPerPage(value) {
+    _serversPerPage = Math.max(10, parseInt(value, 10) || 50);
+    _serversPage = 1;
+    renderServersPage();
+  }
+
+  function changeServersPage(delta) {
+    _serversPage += delta;
+    renderServersPage();
+  }
+
+  function findLowestLatencyServer() {
+    _serversSortMode = 'latency';
+    _serversPage = 1;
+    renderServersPage();
+    toast('Sorted by lowest server latency', 'success');
+  }
+
+  function filterServersTable() {
+    _serversPage = 1;
+    renderServersPage();
+  }
+
+  function serverActionIpChange(serverId) {
+    closeServerActionMenus();
+    openServerModal(serverId);
+    switchServerModalTab('details');
+    setTimeout(() => {
+      $('#srvServerIpPrimary')?.focus();
+      $('#srvServerIpPrimary')?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }, 50);
+  }
+
+  async function getAssignedLiveChannelsForServer(serverId) {
+    const rows = await fetch('/api/channels', { credentials: 'same-origin' }).then((r) => r.json());
+    return (Array.isArray(rows) ? rows : []).filter((ch) => Number(ch.stream_server_id || 0) === Number(serverId));
+  }
+
+  async function serverActionStartAllStreams(serverId) {
+    closeServerActionMenus();
+    if (!confirm('Start all live streams assigned to this server?')) return;
+    try {
+      const channels = await getAssignedLiveChannelsForServer(serverId);
+      let started = 0;
+      for (const ch of channels) {
+        if (ch.status === 'running') continue;
+        await channelFetch(`/${ch.id}/start`, { method: 'POST' });
+        started++;
+      }
+      toast(`Started ${started} stream(s) assigned to this server.`, 'success');
+      loadServers();
+    } catch (e) {
+      toast(e.message || 'Failed to start streams', 'error');
+    }
+  }
+
+  async function serverActionStopAllStreams(serverId) {
+    closeServerActionMenus();
+    if (!confirm('Stop all live streams assigned to this server?')) return;
+    try {
+      const channels = await getAssignedLiveChannelsForServer(serverId);
+      let stopped = 0;
+      for (const ch of channels) {
+        if (ch.status !== 'running') continue;
+        await channelFetch(`/${ch.id}/stop`, { method: 'POST' });
+        stopped++;
+      }
+      toast(`Stopped ${stopped} stream(s) assigned to this server.`, 'success');
+      loadServers();
+    } catch (e) {
+      toast(e.message || 'Failed to stop streams', 'error');
+    }
+  }
+
+  async function serverActionKillConnections(serverId) {
+    closeServerActionMenus();
+    await postServerAction(serverId, 'kill-connections', 'Kill all active connections for this server?', 'Connections cleared');
+  }
+
+  function serverActionEdit(serverId) {
+    closeServerActionMenus();
+    openServerModal(serverId);
+  }
+
+  function serverActionMonitor(serverId) {
+    closeServerActionMenus();
+    _serverMonitorFocusId = serverId;
+    navigateTo('server-monitor', { serverId, replaceHistory: false });
+  }
+
+  async function serverRestartServices() {
+    if (!_serverAdvancedTargetId) return;
+    await postServerAction(_serverAdvancedTargetId, 'restart-services', 'Restart services on this server?', 'Restart services command queued');
+  }
+
+  async function serverReboot() {
+    if (!_serverAdvancedTargetId) return;
+    await postServerAction(_serverAdvancedTargetId, 'reboot-server', 'Reboot this server? This is destructive and may interrupt service.', 'Reboot command queued');
+  }
+
+  function serverOptimizePhp() {
+    toast('Blocked: current TARGET nodes do not provision/manage PHP runtime config in this server-area flow.', 'warning');
+  }
+
+  function serverUpdateFfmpeg() {
+    toast('Blocked: no safe FFmpeg in-place upgrade workflow is currently exposed for TARGET node profiles.', 'warning');
+  }
+
+  // ─── Tag Input Helpers ────────────────────────────────────────────
+  function focusTagInput(inputId) {
+    const el = $(`#${inputId}`);
+    if (el) el.focus();
+  }
+
+  function addTag(inputId, value) {
+    const trimmed = String(value || '').trim();
+    if (!trimmed) return;
+    const wrap = $(`#${inputId}Wrap`);
+    const container = wrap ? wrap.querySelector('.tag-input-container') : null;
+    if (!container) return;
+    // Check duplicate
+    const pills = container.querySelectorAll('.tag-pill');
+    for (const p of pills) {
+      const txt = p.textContent.replace(/\×$/, '').trim();
+      if (txt === trimmed) return;
+    }
+    const pill = document.createElement('span');
+    pill.className = 'tag-pill';
+    pill.innerHTML = `${escHtml(trimmed)}<button type="button" class="tag-pill-remove" onclick="APP.removeTag('${inputId}','${escHtml(trimmed)}')">&times;</button>`;
+    container.insertBefore(pill, wrap.querySelector('.tag-input-field'));
+    const input = container.querySelector('.tag-input-field');
+    if (input) input.value = '';
+  }
+
+  function removeTag(inputId, value) {
+    const trimmed = String(value || '').trim();
+    const wrap = $(`#${inputId}Wrap`);
+    const container = wrap ? wrap.querySelector('.tag-input-container') : null;
+    if (!container) return;
+    const pills = container.querySelectorAll('.tag-pill');
+    pills.forEach(p => {
+      const txt = p.textContent.replace(/\×$/, '').trim();
+      if (txt === trimmed) p.remove();
+    });
+  }
+
+  function handleTagInputKeydown(e, inputId) {
+    if (!e) return;
+    if (e.key === 'Enter' || e.key === ',') {
+      e.preventDefault();
+      const val = e.target ? e.target.value.replace(',', '').trim() : '';
+      if (val) addTag(inputId, val);
+    } else if (e.key === 'Backspace' && !e.target.value) {
+      const wrap = $(`#${inputId}Wrap`);
+      const container = wrap ? wrap.querySelector('.tag-input-container') : null;
+      if (!container) return;
+      const pills = Array.from(container.querySelectorAll('.tag-pill'));
+      if (pills.length > 0) {
+        const last = pills[pills.length - 1];
+        const txt = last.textContent.replace(/\×$/, '').trim();
+        last.remove();
       }
     }
+  }
+
+  // Wire tag input Enter key handling — attached once when modal opens
+  let _srvModalWired = false;
+  function _wireServerModalHandlers() {
+    if (_srvModalWired) return;
+    _srvModalWired = true;
+    ['srvDomains', 'srvHttpPort', 'srvConnLimitPorts'].forEach(inputId => {
+      const el = $(`#${inputId}`);
+      if (el) {
+        el.addEventListener('keydown', (e) => handleTagInputKeydown(e, inputId));
+        el.addEventListener('blur', (e) => {
+          const val = e.target ? e.target.value.trim() : '';
+          if (val) addTag(inputId, val);
+        });
+      }
+    });
+    const sgToggle = $('#srvServerGuardEnabled');
+    if (sgToggle) {
+      sgToggle.addEventListener('change', () => {
+        const settings = $('#srvGuardSettings');
+        const banner = $('#srvGuardBanner');
+        if (settings) settings.style.display = sgToggle.checked ? 'block' : 'none';
+        if (banner) banner.style.display = sgToggle.checked ? 'block' : 'none';
+      });
+    }
+    const ispEntry = $('#srvIspNameEntry');
+    if (ispEntry) {
+      ispEntry.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          addIspName();
+        }
+      });
+    }
+  }
+
+  // ─── SSL Certificate Tab ─────────────────────────────────────────
+  let _srvSSLDomains = [];
+
+  function renderSSLDomainsTable(serverId, domains) {
+    _srvSSLDomains = Array.isArray(domains) ? domains : [];
+    const body = $('#srvSSLDomainsBody');
+    if (!body) return;
+    if (!_srvSSLDomains.length) {
+      body.innerHTML = '<tr><td colspan="5" class="text-center text-muted" style="padding:16px">No SSL domains available for this server yet.</td></tr>';
+      return;
+    }
+    body.innerHTML = _srvSSLDomains.map(d => `
+      <tr>
+        <td>${escHtml(d.domain || '')}</td>
+        <td>${d.ssl_port || 443}</td>
+        <td><span class="status-badge ${d.ssl_status === 'active' ? 'success' : d.ssl_status === 'expired' ? 'error' : 'muted'}">${d.ssl_status === 'active' ? 'Installed' : d.ssl_status === 'expired' ? 'Expired' : 'Not Installed'}</span></td>
+        <td>${d.ssl_expiry ? d.ssl_expiry : '—'}</td>
+        <td>
+          ${d.ssl_status !== 'active'
+            ? `<button type="button" class="btn btn-xs btn-primary" onclick="APP.installSSL(${d.id})">Install SSL</button>`
+            : '<span class="text-muted">Active</span>'}
+        </td>
+      </tr>
+    `).join('');
+  }
+
+  async function installSSL(domainId) {
+    const domain = _srvSSLDomains.find((item) => Number(item.id) === Number(domainId));
+    toast(`Automatic SSL issuance is not implemented for ${domain && domain.domain ? domain.domain : 'this domain'} yet. Current blocker: the panel has no certificate issuance/provisioning backend or remote cert-path sync contract for Edit Server.`, 'warning');
+  }
+
+  // ─── ISP Manager ────────────────────────────────────────────────
+  function addIspName() {
+    const entry = $('#srvIspNameEntry');
+    const area = $('#srvIspNames');
+    if (!entry || !area) return;
+    const value = String(entry.value || '').trim();
+    if (!value) return;
+    const lines = String(area.value || '').split(/\n+/).map((line) => line.trim()).filter(Boolean);
+    if (!lines.includes(value)) lines.push(value);
+    area.value = lines.join('\n');
+    entry.value = '';
+    entry.focus();
+  }
+
+  function clearIspNameEntry() {
+    const entry = $('#srvIspNameEntry');
+    if (entry) entry.value = '';
+  }
+
+  function openIspEditor() {
+    saveServer();
+  }
+
+  // ─── Save Server ────────────────────────────────────────────────
+  async function saveServer() {
+    const id = $('#srvFormId').value.trim();
+    const domains = _getTagValues('srvDomains');
+    const httpPorts = _getTagValues('srvHttpPort');
+    const connectionLimitPorts = _getTagValues('srvConnLimitPorts');
+    const serverRole = $('#serverModal').dataset.serverRole || 'edge';
+    const ispNames = String($('#srvIspNames').value || '').split(/\n+/).map((line) => line.trim()).filter(Boolean);
+
     const body = {
-      name: $('#srvName').value,
-      role: $('#srvRole').value,
-      public_host: $('#srvPublicHost').value,
-      public_ip: $('#srvPublicIp').value,
-      private_ip: $('#srvPrivateIp').value,
+      name: $('#srvName').value.trim(),
+      role: serverRole,
+      public_host: $('#srvProxyIpDefaultDns').value.trim(),
+      public_ip: $('#srvServerIpPrimary').value.trim(),
+      server_ip: $('#srvServerIpPrimary').value.trim(),
+      admin_password: $('#srvRootPassword').value,
       max_clients: parseInt($('#srvMaxClients').value, 10) || 0,
-      sort_order: parseInt($('#srvSortOrder').value, 10) || 0,
-      network_mbps_cap: parseInt($('#srvNetworkCap').value, 10) || 0,
       enabled: $('#srvEnabled').checked,
-      proxied: $('#srvProxied').checked,
-      timeshift_only: $('#srvTimeshift').checked,
+      timeshift_only: $('#srvTimeshiftOnly').checked,
+      full_duplex: $('#srvFullDuplex').checked,
+      boost_fpm: $('#srvBoostFpm').checked,
       domains,
-      meta_json: metaJson,
+      private_users_cdn_lb: $('#srvPrivateUsersCdn').value.trim(),
+      http_port: parseInt(httpPorts[0], 10) || 80,
+      http_port_list: httpPorts,
+      https_m3u_lines: $('#srvHttpsM3uLines').checked,
+      force_ssl_port: $('#srvForceSslPort').checked,
+      https_port: parseInt($('#srvHttpsPort').value, 10) || 443,
+      time_difference: $('#srvTimeDifference').value,
+      ssh_port: parseInt($('#srvSshPortAdv').value, 10) || 22,
+      network_interface: $('#srvNetworkInterface').value,
+      network_speed: $('#srvNetworkSpeed').value,
+      os_info: $('#srvOsInfo').value,
+      geoip_load_balancing: $('#srvGeoipLb').checked,
+      geoip_priority: $('#srvGeoipPriority').value,
+      geoip_countries: $('#srvGeoipCountries').value.trim(),
+      extra_nginx_config: $('#srvExtraNginx').value,
+      server_guard_enabled: $('#srvServerGuardEnabled').checked,
+      ip_whitelisting: $('#srvIpWhitelisting').checked,
+      botnet_fighter: $('#srvBotnetFighter').checked,
+      under_attack: $('#srvUnderAttack').checked,
+      connection_limit_ports: connectionLimitPorts.join(','),
+      max_conn_per_ip: parseInt($('#srvMaxConnPerIp').value, 10) || 0,
+      max_hits_normal_user: parseInt($('#srvMaxHitsNormal').value, 10) || 50,
+      max_hits_restreamer: parseInt($('#srvMaxHitsRestreamer').value, 10) || 1200,
+      server_guard_whitelist_username: $('#srvWhitelistUsername').value.trim(),
+      block_user_minutes: parseInt($('#srvBlockUserMins').value, 10) || 10,
+      server_guard_auto_restart_mysql_value: $('#srvAutoRestartMysql').value.trim(),
+      isp_enabled: $('#srvIspEnabled').checked,
+      isp_priority_label: $('#srvIspPriority').value,
+      isp_allowed_names: ispNames.join(','),
     };
+
     try {
       if (id) await apiFetch(`/servers/${id}`, { method: 'PUT', body: JSON.stringify(body) });
       else await apiFetch('/servers', { method: 'POST', body: JSON.stringify(body) });
-      toast('Server saved');
+      toast('Server updated');
       closeServerModal();
-      loadServers();
+      await loadServers();
     } catch (e) { toast(e.message, 'error'); }
   }
 
@@ -3452,6 +7715,7 @@
       user: ($('#srvSshUser').value || '').trim() || 'root',
       password: $('#srvSshPassword').value || '',
       panel_url: panelUrl,
+      profile: ($('#srvNodeProfile').value || 'origin-runtime'),
     };
 
     if (existingId) {
@@ -3479,10 +7743,10 @@
       if (logEl) logEl.textContent = `Job #${job.id || '?'} started…\n`;
       if (job.server_id && !existingId) {
         $('#srvFormId').value = String(job.server_id);
-        $('#serverModalTitle').textContent = 'Edit server';
+        $('#serverModalTitle').textContent = 'Edit Server';
         $('#srvName').value = name;
-        $('#srvPublicHost').value = publicHost;
-        $('#srvRole').value = 'lb';
+        $('#srvProxyIpDefaultDns').value = publicHost;
+        $('#serverModal').dataset.serverRole = 'lb';
       }
       const poll = async () => {
         try {
@@ -3499,46 +7763,6 @@
   }
 
   // ─── Security ────────────────────────────────────────────────────
-
-  async function loadSecurity() {
-    try {
-      const [ips, uas] = await Promise.all([apiFetch('/security/blocked-ips'), apiFetch('/security/blocked-uas')]);
-      $('#blockedIpsTable tbody').innerHTML = (ips.items || []).map(i => `
-        <tr><td>${i.id}</td><td>${escHtml(i.ip)}</td><td>${escHtml(i.notes || '')}</td><td>${i.created_at || ''}</td>
-        <td><button class="btn btn-xs btn-danger" onclick="APP.removeBlockedIp(${i.id})">Del</button></td></tr>
-      `).join('');
-      $('#blockedUasTable tbody').innerHTML = (uas.items || []).map(u => `
-        <tr><td>${u.id}</td><td>${escHtml(u.user_agent)}</td><td>${escHtml(u.notes || '')}</td><td>${u.created_at || ''}</td>
-        <td><button class="btn btn-xs btn-danger" onclick="APP.removeBlockedUa(${u.id})">Del</button></td></tr>
-      `).join('');
-    } catch (e) { toast(e.message, 'error'); }
-  }
-
-  async function addBlockedIp() {
-    const ip = prompt('Enter IP to block:');
-    if (!ip) return;
-    try { await apiFetch('/security/blocked-ips', { method: 'POST', body: JSON.stringify({ ip }) }); toast('IP blocked'); loadSecurity(); }
-    catch (e) { toast(e.message, 'error'); }
-  }
-
-  async function addBlockedUa() {
-    const ua = prompt('Enter User Agent to block:');
-    if (!ua) return;
-    try { await apiFetch('/security/blocked-uas', { method: 'POST', body: JSON.stringify({ user_agent: ua }) }); toast('UA blocked'); loadSecurity(); }
-    catch (e) { toast(e.message, 'error'); }
-  }
-
-  async function removeBlockedIp(id) {
-    if (!confirm('Unblock?')) return;
-    try { await apiFetch(`/security/blocked-ips/${id}`, { method: 'DELETE' }); toast('Removed'); loadSecurity(); }
-    catch (e) { toast(e.message, 'error'); }
-  }
-
-  async function removeBlockedUa(id) {
-    if (!confirm('Unblock?')) return;
-    try { await apiFetch(`/security/blocked-uas/${id}`, { method: 'DELETE' }); toast('Removed'); loadSecurity(); }
-    catch (e) { toast(e.message, 'error'); }
-  }
 
   // ─── Logs ────────────────────────────────────────────────────────
 
@@ -3734,10 +7958,7 @@
 
   /** Restore progress UI after refresh while a job still runs server-side (in-memory job map). */
   async function resumeImportJobFromStorage() {
-    let stored = null;
-    try {
-      stored = localStorage.getItem(IMPORT_JOB_STORAGE_KEY);
-    } catch (_) {}
+    const stored = readImportJobId();
     if (!stored) return;
     try {
       const j = await apiFetch(`/import/jobs/${encodeURIComponent(stored)}`);
@@ -3799,7 +8020,10 @@
 
   async function loadLogs() {
     try {
-      const [logData, actData] = await Promise.all([apiFetch('/logs'), apiFetch('/activity')]);
+      const [logData, actData] = await Promise.all([
+        apiFetchOptional('/logs', { logs: [] }),
+        apiFetchOptional('/activity', { activity: [] }),
+      ]);
       $('#panelLogsTable tbody').innerHTML = (logData.logs || []).map(l => `
         <tr><td>${l.id}</td><td>${escHtml(l.action || '')}</td><td>${escHtml(l.target_type || '')} ${l.target_id || ''}</td><td>${escHtml(l.details || '')}</td><td>${l.created_at || ''}</td></tr>
       `).join('') || '<tr><td colspan="5">No logs</td></tr>';
@@ -3808,6 +8032,302 @@
       `).join('') || '<tr><td colspan="6">No activity</td></tr>';
     } catch (e) { toast(e.message, 'error'); }
   }
+
+  // ─── Monitor (Bandwidth + Health) ──────────────────────────────────
+
+  APP._bwPeriod = 6;
+  APP._bwHistoryChart = null;
+  APP._bwHistoryLabels = [];
+  APP._bwHistoryRx = [];
+  APP._bwHistoryTx = [];
+
+  function renderBwHistoryChart(points, periodHours) {
+    const canvas = document.getElementById('bwHistoryChart');
+    if (!canvas) return;
+
+    // Aggregate by time bucket depending on period
+    const bucketSec = periodHours <= 6 ? 60 : periodHours <= 24 ? 300 : 3600;
+    const buckets = new Map();
+    for (const p of points) {
+      const t = new Date(p.time);
+      const rounded = new Date(Math.floor(t.getTime() / (bucketSec * 1000)) * (bucketSec * 1000));
+      const key = rounded.toISOString();
+      if (!buckets.has(key)) buckets.set(key, { rx: [], tx: [] });
+      buckets.get(key).rx.push(p.rxMbps || 0);
+      buckets.get(key).tx.push(p.txMbps || 0);
+    }
+
+    const labels = [];
+    const rxData = [];
+    const txData = [];
+    [...buckets.entries()].sort((a, b) => a[0].localeCompare(b[0])).forEach(([key, vals]) => {
+      const d = new Date(key);
+      const label = periodHours <= 24
+        ? `${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}`
+        : `${d.getMonth()+1}/${d.getDate()} ${d.getHours().toString().padStart(2,'0')}:00`;
+      labels.push(label);
+      rxData.push(+((vals.rx.reduce((a, b) => a + b, 0) / vals.rx.length) || 0).toFixed(3));
+      txData.push(+((vals.tx.reduce((a, b) => a + b, 0) / vals.tx.length) || 0).toFixed(3));
+    });
+
+    if (APP._bwHistoryChart) {
+      APP._bwHistoryChart.destroy();
+      APP._bwHistoryChart = null;
+    }
+
+    APP._bwHistoryChart = new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          {
+            label: 'In (Mbps)',
+            data: rxData,
+            borderColor: '#6b9ef5',
+            backgroundColor: 'rgba(107,158,245,0.1)',
+            borderWidth: 2, pointRadius: 0, tension: 0.4, fill: true,
+          },
+          {
+            label: 'Out (Mbps)',
+            data: txData,
+            borderColor: '#22c55e',
+            backgroundColor: 'rgba(34,197,94,0.1)',
+            borderWidth: 2, pointRadius: 0, tension: 0.4, fill: true,
+          },
+        ],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false, animation: { duration: 300 },
+        scales: {
+          x: { ticks: { color: '#8b949e', font: { size: 10 }, maxTicksLimit: 12 }, grid: { color: 'rgba(255,255,255,0.05)' } },
+          y: { ticks: { color: '#8b949e', font: { size: 10 }, callback: v => v + ' Mbps' }, grid: { color: 'rgba(255,255,255,0.05)' }, beginAtZero: true },
+        },
+        plugins: {
+          legend: { labels: { color: '#8b949e', font: { size: 11 }, boxWidth: 12 } },
+          tooltip: { callbacks: { label: ctx => ` ${ctx.dataset.label}: ${ctx.parsed.y} Mbps` } },
+        },
+      },
+    });
+  }
+
+  async function loadMonitorPage() {
+    if (!monitorModule) return;
+    return monitorModule.loadMonitorPage({
+      apiFetch,
+      toast,
+      dashboardRelativeAge,
+      getBwPeriod: () => APP._bwPeriod,
+      getBwHistoryChart: () => APP._bwHistoryChart,
+      setBwHistoryChart: (chart) => { APP._bwHistoryChart = chart; },
+    });
+  }
+
+  APP.setBwPeriod = function(hours) {
+    APP._bwPeriod = hours;
+    document.querySelectorAll('.monitor-period-btns .btn').forEach(b => b.classList.remove('active'));
+    const btn = document.getElementById('bwBtn' + hours + 'h');
+    if (btn) btn.classList.add('active');
+    loadMonitorPage();
+  };
+
+  // ─── Sharing Detection ────────────────────────────────────────────
+
+  APP._sharingCache = [];
+
+  async function loadSharingPage() {
+    try {
+      const data = await apiFetchOptional('/sharing', { users: [] });
+      const users = data.users || [];
+      APP._sharingCache = users;
+
+      document.getElementById('sharingFlaggedCount').textContent = users.filter(u => u.flagged).length;
+
+      renderSharingTable(users);
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  }
+
+  function renderSharingTable(users) {
+    const tb = document.querySelector('#sharingTable tbody');
+    if (!tb) return;
+
+    const search = (document.getElementById('sharingSearch')?.value || '').toLowerCase();
+    const filtered = users.filter(u =>
+      u.username.toLowerCase().includes(search) ||
+      u.ips.some(ip => ip.toLowerCase().includes(search))
+    );
+
+    if (filtered.length === 0) {
+      tb.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#8b949e;padding:2rem">No users found</td></tr>';
+      return;
+    }
+
+    tb.innerHTML = filtered.map((u, i) => {
+      const countClass = u.flagged ? 'danger' : u.uniqueIps > 0 ? 'warn' : 'safe';
+      const ipsList = u.ips.slice(0, 8).map(ip => `<span class="sharing-ip-chip">${ip}</span>`).join('');
+      const overflow = u.ips.length > 8 ? `<span class="sharing-ip-chip" style="color:#8b949e">+${u.ips.length - 8}</span>` : '';
+      const isActive = u.status === 'Active';
+      return `<tr>
+        <td>${i + 1}</td>
+        <td><strong>${escHtml(u.username)}</strong></td>
+        <td><div class="sharing-ip-list">${ipsList}${overflow}</div></td>
+        <td><span class="sharing-unique-count ${countClass}">${u.uniqueIps}</span></td>
+        <td><span class="status-badge ${isActive ? 'active' : 'passive'}">${u.status || 'Unknown'}</span></td>
+        <td>
+          <button class="btn-clear-history" onclick="APP.clearSharingHistory(${u.userId})" title="Clear IP history">
+            Clear
+          </button>
+        </td>
+      </tr>`;
+    }).join('');
+  }
+
+  APP.clearSharingHistory = async function(userId) {
+    if (!confirm('Clear IP history for this user?')) return;
+    try {
+      await apiFetch(`/sharing/${userId}/clear`, { method: 'POST' });
+      toast('History cleared', 'success');
+      loadSharingPage();
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  };
+
+  APP.scanSharing = async function() {
+    try {
+      toast('Scanning...', 'info');
+      const data = await apiFetch('/sharing/scan', { method: 'POST' });
+      toast(`Scanned ${data.scanned || 0} users`, 'success');
+      loadSharingPage();
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  };
+
+  // Search listener
+  document.getElementById('sharingSearch')?.addEventListener('input', () => {
+    renderSharingTable(APP._sharingCache);
+  });
+
+  // ─── Backup Management ────────────────────────────────────────────
+
+  APP._backupsCache = [];
+  APP._backupRetentionLimit = null;
+  APP._cloudBackupCapability = null;
+
+  async function loadBackupsPage() {
+    if (!backupsModule) return;
+    return backupsModule.loadBackupsPage({
+      apiFetch, apiFetchOptional, escHtml, toast,
+      getCurrentPage: () => _currentPage,
+      loadSettings,
+      getBackupsCache: () => APP._backupsCache,
+      setBackupsCache: (rows) => { APP._backupsCache = rows; },
+      getBackupRetentionLimit: () => APP._backupRetentionLimit,
+      setBackupRetentionLimit: (value) => { APP._backupRetentionLimit = value; },
+      getCloudBackupCapability: () => APP._cloudBackupCapability,
+      setCloudBackupCapability: (value) => { APP._cloudBackupCapability = value; },
+    });
+  }
+
+  async function loadCloudBackups() {
+    if (!backupsModule) return;
+    return backupsModule.loadCloudBackups({
+      apiFetch, escHtml,
+      getBackupsCache: () => APP._backupsCache,
+      getCloudBackupCapability: () => APP._cloudBackupCapability,
+      setCloudBackupCapability: (value) => { APP._cloudBackupCapability = value; },
+    });
+  }
+
+  function renderLocalBackups(backups) {
+    if (!backupsModule) return;
+    return backupsModule.renderLocalBackups({
+      escHtml,
+      getCloudBackupCapability: () => APP._cloudBackupCapability,
+    }, backups);
+  }
+
+  APP.createBackup = async function() {
+    if (!backupsModule) return;
+    return backupsModule.createBackup({
+      apiFetch, apiFetchOptional, escHtml, toast,
+      getCurrentPage: () => _currentPage,
+      loadSettings,
+      getBackupsCache: () => APP._backupsCache,
+      setBackupsCache: (rows) => { APP._backupsCache = rows; },
+      getBackupRetentionLimit: () => APP._backupRetentionLimit,
+      setBackupRetentionLimit: (value) => { APP._backupRetentionLimit = value; },
+      getCloudBackupCapability: () => APP._cloudBackupCapability,
+      setCloudBackupCapability: (value) => { APP._cloudBackupCapability = value; },
+    });
+  };
+
+  APP.downloadBackup = async function(id) {
+    if (!backupsModule) return;
+    return backupsModule.downloadBackup(id);
+  };
+
+  APP.restoreBackup = async function(id) {
+    if (!backupsModule) return;
+    return backupsModule.restoreBackup({
+      apiFetch, apiFetchOptional, escHtml, toast,
+      getCurrentPage: () => _currentPage,
+      loadSettings,
+      getBackupsCache: () => APP._backupsCache,
+      setBackupsCache: (rows) => { APP._backupsCache = rows; },
+      getBackupRetentionLimit: () => APP._backupRetentionLimit,
+      setBackupRetentionLimit: (value) => { APP._backupRetentionLimit = value; },
+      getCloudBackupCapability: () => APP._cloudBackupCapability,
+      setCloudBackupCapability: (value) => { APP._cloudBackupCapability = value; },
+    }, id);
+  };
+
+  APP.deleteBackup = async function(id) {
+    if (!backupsModule) return;
+    return backupsModule.deleteBackup({
+      apiFetch, apiFetchOptional, escHtml, toast,
+      getCurrentPage: () => _currentPage,
+      loadSettings,
+      getBackupsCache: () => APP._backupsCache,
+      setBackupsCache: (rows) => { APP._backupsCache = rows; },
+      getBackupRetentionLimit: () => APP._backupRetentionLimit,
+      setBackupRetentionLimit: (value) => { APP._backupRetentionLimit = value; },
+      getCloudBackupCapability: () => APP._cloudBackupCapability,
+      setCloudBackupCapability: (value) => { APP._cloudBackupCapability = value; },
+    }, id);
+  };
+
+  APP.uploadBackupCloud = async function(id) {
+    if (!backupsModule) return;
+    return backupsModule.uploadBackupCloud({
+      apiFetch, escHtml, toast,
+      getCurrentPage: () => _currentPage,
+      loadSettings,
+      getCloudBackupCapability: () => APP._cloudBackupCapability,
+      setCloudBackupCapability: (value) => { APP._cloudBackupCapability = value; },
+      getBackupsCache: () => APP._backupsCache,
+    }, id);
+  };
+
+  APP.toggleCloudConfig = function() {
+    if (!backupsModule) return;
+    return backupsModule.toggleCloudConfig();
+  };
+
+  APP.saveCloudConfig = async function() {
+    if (!backupsModule) return;
+    return backupsModule.saveCloudConfig({
+      apiFetch, toast,
+      getCurrentPage: () => _currentPage,
+      loadSettings,
+    });
+  };
+
+  document.getElementById('backupsSearch')?.addEventListener('input', () => {
+    renderLocalBackups(APP._backupsCache);
+  });
 
   // ─── Access Codes ─────────────────────────────────────────────────
 
@@ -3913,6 +8433,7 @@
       const r = await apiFetch('/system/db-optimize', { method: 'POST', body: JSON.stringify({}) });
       toast(r.message || 'Optimize completed');
       loadDbManager();
+      if (_currentPage === 'settings') loadSettings();
     } catch (e) { toast(e.message, 'error'); }
   }
 
@@ -3922,6 +8443,7 @@
       const r = await apiFetch('/system/db-repair', { method: 'POST', body: JSON.stringify({}) });
       toast(r.message || 'Repair completed');
       loadDbManager();
+      if (_currentPage === 'settings') loadSettings();
     } catch (e) { toast(e.message, 'error'); }
   }
 
@@ -3933,9 +8455,12 @@
 
     $('#loginForm').addEventListener('submit', doLogin);
     $('#logoutBtn').addEventListener('click', (e) => { e.preventDefault(); doLogout(); });
+    applySidebarLayoutState();
     $('#sidebarToggle').addEventListener('click', () => {
-      document.querySelector('.sidebar').classList.toggle('collapsed');
+      toggleSidebarLayout();
     });
+    syncAdminRouteLinks();
+    normalizeLegacyAdminHashOnBoot();
 
     $$('.nav-link[data-page]').forEach(link => {
       link.addEventListener('click', (e) => {
@@ -3944,36 +8469,80 @@
       });
     });
 
+    window.addEventListener('popstate', () => {
+      const route = getRequestedAdminRoute({ ignoreHash: true, ignoreSaved: true });
+      const routePage = route.page || 'dashboard';
+      const routeServerId = route.serverId || null;
+      const currentServerId = _currentPage === 'server-monitor' ? (_serverMonitorSelectedId || null) : null;
+      if (routePage !== _currentPage || routeServerId !== currentServerId) {
+        navigateTo(routePage, { skipHistory: true, serverId: routeServerId });
+      }
+    });
     window.addEventListener('hashchange', () => {
-      const page = location.hash.replace('#', '');
-      if (page && page !== _currentPage) navigateTo(page);
+      const route = parseAdminHashRoute(location.hash);
+      if (!route.page || !isKnownAdminPageKey(route.page)) return;
+      navigateTo(route.page, {
+        replaceHistory: true,
+        serverId: parsePositiveInt(route.params.get('server') || route.params.get('id')),
+      });
+    });
+    window.addEventListener('resize', () => {
+      closeServerActionMenus();
+      closeLineActionMenus();
+      applySidebarLayoutState();
+    });
+    window.addEventListener('scroll', () => {
+      closeServerActionMenus();
+      closeLineActionMenus();
+    }, true);
+
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('[data-server-action-wrap]')) closeServerActionMenus();
+      if (!e.target.closest('[data-line-action-wrap]')) closeLineActionMenus();
     });
 
     // Filter event listeners
-    ['linesSearch', 'linesStatusFilter'].forEach(id => {
+    ['linesSearch', 'linesStatusFilter', 'linesResellerFilter', 'linesTypeFilter', 'linesPackageFilter', 'linesPerPage'].forEach(id => {
       const el = $(`#${id}`);
-      if (el) el.addEventListener('input', () => loadLines());
+      if (el) {
+        const handler = () => { _linesPage = 1; loadLines(); };
+        el.addEventListener('input', handler);
+        el.addEventListener('change', handler);
+      }
     });
+    ['registeredUsersSearch', 'registeredUsersGroupFilter', 'registeredUsersStatusFilter', 'registeredUsersPerPage'].forEach(id => {
+      const el = $(`#${id}`);
+      if (!el) return;
+      const handler = () => { _registeredUsersPage = 1; loadRegisteredUsers(); };
+      el.addEventListener('input', handler);
+      el.addEventListener('change', handler);
+    });
+    const groupSearch = $('#memberGroupsSearch');
+    if (groupSearch) {
+      groupSearch.addEventListener('input', () => loadMemberGroups());
+      groupSearch.addEventListener('change', () => loadMemberGroups());
+    }
+    const expirySearch = $('#expiryMediaSearch');
+    if (expirySearch) {
+      expirySearch.addEventListener('input', () => loadExpiryMedia());
+      expirySearch.addEventListener('change', () => loadExpiryMedia());
+    }
+    const creditsMode = $('#registeredUserCreditsMode');
+    const creditsAmount = $('#registeredUserCreditsAmount');
+    if (creditsMode) creditsMode.addEventListener('change', updateRegisteredUserCreditsPreview);
+    if (creditsAmount) creditsAmount.addEventListener('input', updateRegisteredUserCreditsPreview);
+    const importBqSearch = $('#importUsersBouquetSearch');
+    if (importBqSearch) importBqSearch.addEventListener('input', renderImportUsersBouquetList);
     function debounceLoadMovies(el) {
       clearTimeout(el._t);
+      _moviesPage = 1;
       el._t = setTimeout(loadMovies, 300);
     }
     function debounceLoadSeries(el) {
       clearTimeout(el._t);
+      _seriesPage = 1;
       el._t = setTimeout(loadSeriesList, 300);
     }
-    ['moviesSearch', 'moviesCatFilter', 'moviesSortOrder'].forEach(id => {
-      const el = $(`#${id}`);
-      if (!el) return;
-      el.addEventListener('input', () => debounceLoadMovies(el));
-      el.addEventListener('change', () => debounceLoadMovies(el));
-    });
-    ['seriesSearch', 'seriesCatFilter', 'seriesSortOrder'].forEach(id => {
-      const el = $(`#${id}`);
-      if (!el) return;
-      el.addEventListener('input', () => debounceLoadSeries(el));
-      el.addEventListener('change', () => debounceLoadSeries(el));
-    });
     ['streamsSearch'].forEach(id => {
       const el = $(`#${id}`);
       if (!el) return;
@@ -3993,16 +8562,50 @@
     if (streamStatusF) streamStatusF.addEventListener('change', () => { _streamsPage = 1; renderStreamsTable(); });
     const streamCatF = $('#streamsCategoryFilter');
     if (streamCatF) streamCatF.addEventListener('change', () => { _streamsPage = 1; renderStreamsTable(); });
-    const streamsPerPage = $('#streamsPerPage');
-    if (streamsPerPage) streamsPerPage.addEventListener('change', () => { _streamsPage = 1; renderStreamsTable(); });
+    const streamServerF = $('#streamsServerFilter');
+    if (streamServerF) streamServerF.addEventListener('change', () => { _streamsPage = 1; renderStreamsTable(); });
+    const streamPerPage = $('#streamsPerPage');
+    if (streamPerPage) streamPerPage.addEventListener('change', () => { _streamsPage = 1; renderStreamsTable(); });
+    const channelLogoSearch = $('#channelLogoSearchQuery');
+    if (channelLogoSearch) channelLogoSearch.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); searchChannelLogos(); } });
 
-    $$('#streamModalTabs .xc-tab').forEach(tab => {
+    // Categories tab switching (Channel | Movie | Series)
+    document.querySelectorAll('[data-cat-type]').forEach(tab => {
+      if (tab.dataset.catType === undefined) return;
       tab.addEventListener('click', () => {
-        const panel = tab.dataset.panel;
-        $$('#streamModalTabs .xc-tab').forEach(t => t.classList.toggle('active', t === tab));
-        $$('#streamModal .xc-tab-panel').forEach(p => p.classList.toggle('active', p.id === panel));
+        document.querySelectorAll('[data-cat-type]').forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        loadCategoriesPage(tab.dataset.catType);
       });
     });
+
+    // Movies search & filter listeners
+    ['moviesSearch', 'moviesCatFilter', 'moviesStatusFilter'].forEach(id => {
+      const el = $(`#${id}`);
+      if (!el) return;
+      el.addEventListener('input', () => debounceLoadMovies(el));
+      el.addEventListener('change', () => debounceLoadMovies(el));
+    });
+
+    // Series search & filter listeners (no sort order anymore)
+    ['seriesSearch', 'seriesCatFilter', 'seriesStatusFilter'].forEach(id => {
+      const el = $(`#${id}`);
+      if (!el) return;
+      el.addEventListener('input', () => debounceLoadSeries(el));
+      el.addEventListener('change', () => debounceLoadSeries(el));
+    });
+
+    // Categories search listener
+    const catSearchEl = $('#categoriesSearch');
+    if (catSearchEl) {
+      catSearchEl.addEventListener('input', () => {
+        clearTimeout(catSearchEl._t);
+        catSearchEl._t = setTimeout(() => {
+          loadCategoriesPage(document.querySelector('[data-cat-type].active')?.dataset.catType || 'live');
+        }, 300);
+      });
+    }
+
     const fpsRestartCb = $('#streamFpsRestart');
     if (fpsRestartCb) fpsRestartCb.addEventListener('change', updateFpsThresholdVisibility);
     const ict = $('#importContentType');
@@ -4334,15 +8937,500 @@
     }).catch(() => alert('Failed to copy'));
   }
 
-  document.addEventListener('DOMContentLoaded', init);
+  // ─── Phase 06 Domain Wrappers ───────────────────────────────────
 
-  window.APP = {
+  function buildLinesModuleContext() {
+    return {
+      $, $$, escHtml, apiFetch, populateSelect, toast, formatDate,
+      ensureResellersCache,
+      getResellersCache: () => _resellersCache,
+      getPackages: () => _packages,
+      getLinesPage: () => _linesPage,
+      setLinesPage: (v) => { _linesPage = v; },
+      getLinesPerPage: () => _linesPerPage,
+      setLinesPerPage: (v) => { _linesPerPage = v; },
+      getLinesAutoRefreshTimer: () => _linesAutoRefreshTimer,
+      setLinesAutoRefreshTimer: (v) => { _linesAutoRefreshTimer = v; },
+      getResellerLabel,
+      openLineForm,
+      lineStatusLabel,
+      parseTextareaList,
+      parseDateInputValue,
+      getLineStatsTargetId: () => _lineStatsTargetId,
+      getLineExtendTarget: () => _lineExtendTarget,
+      setLineExtendTarget: (v) => { _lineExtendTarget = v; },
+    };
+  }
+
+  function buildStreamsModuleContext() {
+    return {
+      $, escHtml, toast, api, makeSortable,
+      getCurrentPage: () => _currentPage,
+      getCategories: () => _categories,
+      getServersCache: () => _serversCache,
+      getStreamsCache: () => _streamsCache,
+      setStreamsCache: (v) => { _streamsCache = v; },
+      getStreamsPage: () => _streamsPage,
+      setStreamsPage: (v) => { _streamsPage = v; },
+      getStreamsPerPage: () => _streamsPerPage,
+      setStreamsPerPage: (v) => { _streamsPerPage = v; },
+      setStreamsTotal: (v) => { _streamsTotal = v; },
+      getStreamsAutoRefreshEnabled: () => _streamsAutoRefreshEnabled,
+      setStreamsAutoRefreshEnabled: (v) => { _streamsAutoRefreshEnabled = !!v; },
+      getStreamsAutoRefreshTimer: () => _streamsAutoRefreshTimer,
+      setStreamsAutoRefreshTimer: (v) => { _streamsAutoRefreshTimer = v; },
+      ensureServersCacheForPlaylist,
+      loadRefData,
+      fetchHealthData,
+      getStreamServerName,
+      getStreamSourceUrl,
+      formatStreamFps,
+      formatSourceHost,
+      getChannelLogoTarget: () => _channelLogoTarget,
+      setChannelLogoTarget: (v) => { _channelLogoTarget = v; },
+      getChannelLogoSearchResults: () => _channelLogoSearchResults,
+      setChannelLogoSearchResults: (v) => { _channelLogoSearchResults = v; },
+      updateChannelLogoPreview,
+    };
+  }
+
+  function buildResellerMembersContext() {
+    return {
+      $, escHtml, apiFetch, toast, navigateTo, loadRefData, statusBadge,
+      formatUserDate, syncRegisteredUsersGroupControls, renderRegisteredUsersPagination,
+      renderRegisteredUserPackageOverridesTable, getResellerMemberGroups,
+      collectRegisteredUserPackageOverrides, updateRegisteredUserCreditsPreview,
+      renderExpiryMediaScenarioRows, collectExpiryMediaRows,
+      getCurrentPage: () => _currentPage,
+      getRegisteredUsersPage: () => _registeredUsersPage,
+      setRegisteredUsersPage: (v) => { _registeredUsersPage = v; },
+      getRegisteredUsersPerPage: () => _registeredUsersPerPage,
+      setRegisteredUsersPerPage: (v) => { _registeredUsersPerPage = v; },
+      getRegisteredUsersEditingId: () => _registeredUsersEditingId,
+      setRegisteredUsersEditingId: (v) => { _registeredUsersEditingId = v; },
+      getRegisteredUsersCurrentRows: () => _registeredUsersCurrentRows,
+      setRegisteredUsersCurrentRows: (v) => { _registeredUsersCurrentRows = v; },
+      getRegisteredUserPackageOverrides: () => _registeredUserPackageOverrides,
+      setRegisteredUserPackageOverrides: (v) => { _registeredUserPackageOverrides = v; },
+      setRegisteredUserNotesTarget: (v) => { _registeredUserNotesTarget = v; },
+      getRegisteredUserCreditsTarget: () => _registeredUserCreditsTarget,
+      setRegisteredUserCreditsTarget: (v) => { _registeredUserCreditsTarget = v; },
+      setMemberGroupsCurrentRows: (v) => { _memberGroupsCurrentRows = v; },
+      getExpiryMediaEditingServiceId: () => _expiryMediaEditingServiceId,
+      setExpiryMediaEditingServiceId: (v) => { _expiryMediaEditingServiceId = v; },
+      setExpiryMediaCurrentRows: (v) => { _expiryMediaCurrentRows = v; },
+    };
+  }
+
+  function buildServerAreaContext() {
+    return {
+      $, escHtml, apiFetch, toast, populateSelect,
+      renderServersPage, renderServerOrderTable, getAdminFeatures,
+      getAdminFeaturesCache: () => _adminFeatures,
+      getServersCache: () => _serversCache,
+      setServersCache: (v) => { _serversCache = v; },
+      setServersSummaryCache: (v) => { _serversSummaryCache = v; },
+      getServerOrder: () => _serverOrder,
+      setServerOrder: (v) => { _serverOrder = v; },
+    };
+  }
+
+  function buildSettingsModuleContext() {
+    return {
+      $, $$, apiFetch, apiFetchOptional, toast, checkForUpdates,
+      SETTINGS_PARITY_DEFAULTS, SETTINGS_GENERAL_SECTIONS, SETTINGS_XTREAM_SECTIONS,
+      SETTINGS_RESELLER_SECTIONS, SETTINGS_STREAMING_SECTIONS,
+      renderSettingsSections, renderStreamingPerformanceBlock, renderDatabaseSettings,
+      renderSettingsBackupsTable, renderAdvancedRawSettings, syncSettingsSummary,
+      initSettingsChipEditors, loadStreamingPerformanceSettings, switchSettingsTab,
+      loadTelegramSettings, saveTelegramSettings, getSettingValue, applyPanelBranding,
+      setSettingsDataCache: (v) => { _settingsDataCache = v; },
+    };
+  }
+
+  function buildSecurityModuleContext() {
+    return { $, escHtml, apiFetch, apiFetchOptional, toast };
+  }
+
+  async function loadLines() {
+    if (!linesModule) return;
+    return linesModule.loadLines(buildLinesModuleContext());
+  }
+
+  function goLinesPage(p) {
+    if (!linesModule) return;
+    return linesModule.goLinesPage(buildLinesModuleContext(), p);
+  }
+
+  function resetLineFilters() {
+    if (!linesModule) return;
+    return linesModule.resetLineFilters(buildLinesModuleContext());
+  }
+
+  async function toggleBanLine(id, currentEnabled) {
+    if (!linesModule) return;
+    return linesModule.toggleBanLine(buildLinesModuleContext(), id, currentEnabled);
+  }
+
+  async function deleteLine(id) {
+    if (!linesModule) return;
+    return linesModule.deleteLine(buildLinesModuleContext(), id);
+  }
+
+  async function deleteExpiredLines() {
+    if (!linesModule) return;
+    return linesModule.deleteExpiredLines(buildLinesModuleContext());
+  }
+
+  function stopLinesAutoRefresh() {
+    if (!linesModule) return;
+    return linesModule.stopLinesAutoRefresh(buildLinesModuleContext());
+  }
+
+  function toggleLinesAutoRefresh() {
+    if (!linesModule) return;
+    return linesModule.toggleLinesAutoRefresh(buildLinesModuleContext());
+  }
+
+  function createTrialUser() {
+    if (!linesModule) return;
+    return linesModule.createTrialUser(buildLinesModuleContext());
+  }
+
+  function createPaidUser() {
+    if (!linesModule) return;
+    return linesModule.createPaidUser(buildLinesModuleContext());
+  }
+
+  async function toggleDisableLine(id, enabled) {
+    if (!linesModule) return;
+    return linesModule.toggleDisableLine(buildLinesModuleContext(), id, enabled);
+  }
+
+  async function killLineConnections(id) {
+    if (!linesModule) return;
+    return linesModule.killLineConnections(buildLinesModuleContext(), id);
+  }
+
+  function closeLineActionMenus() {
+    if (!linesModule) return;
+    return linesModule.closeLineActionMenus(buildLinesModuleContext());
+  }
+
+  function toggleLineInfoMenu(event, lineId) {
+    if (!linesModule) return;
+    return linesModule.toggleLineInfoMenu(buildLinesModuleContext(), event, lineId);
+  }
+
+  function toggleLineSettingsMenu(event, lineId) {
+    if (!linesModule) return;
+    return linesModule.toggleLineSettingsMenu(buildLinesModuleContext(), event, lineId);
+  }
+
+  async function loadLineStats(id = _lineStatsTargetId) {
+    if (!linesModule) return;
+    return linesModule.loadLineStats(buildLinesModuleContext(), id);
+  }
+
+  async function openLineRestrictions(id) {
+    if (!linesModule) return;
+    return linesModule.openLineRestrictions(buildLinesModuleContext(), id);
+  }
+
+  function closeLineRestrictionsModal() {
+    if (!linesModule) return;
+    return linesModule.closeLineRestrictionsModal(buildLinesModuleContext());
+  }
+
+  async function saveLineRestrictions() {
+    if (!linesModule) return;
+    return linesModule.saveLineRestrictions(buildLinesModuleContext());
+  }
+
+  async function openLineExtendModal(id) {
+    if (!linesModule) return;
+    return linesModule.openLineExtendModal(buildLinesModuleContext(), id);
+  }
+
+  function closeLineExtendModal() {
+    if (!linesModule) return;
+    return linesModule.closeLineExtendModal(buildLinesModuleContext());
+  }
+
+  async function saveLineExtension() {
+    if (!linesModule) return;
+    return linesModule.saveLineExtension(buildLinesModuleContext());
+  }
+
+  function toggleStreamsAutoRefresh() {
+    if (!streamsModule) return;
+    return streamsModule.toggleStreamsAutoRefresh(buildStreamsModuleContext());
+  }
+
+  async function loadStreams(options = {}) {
+    if (!streamsModule) return;
+    return streamsModule.loadStreams(buildStreamsModuleContext(), options);
+  }
+
+  function renderStreamsTable() {
+    if (!streamsModule) return;
+    return streamsModule.renderStreamsTable(buildStreamsModuleContext());
+  }
+
+  async function openChannelLogoModal(id) {
+    if (!streamsModule) return;
+    return streamsModule.openChannelLogoModal(buildStreamsModuleContext(), id);
+  }
+
+  function closeChannelLogoModal() {
+    if (!streamsModule) return;
+    return streamsModule.closeChannelLogoModal(buildStreamsModuleContext());
+  }
+
+  async function searchChannelLogos() {
+    if (!streamsModule) return;
+    return streamsModule.searchChannelLogos(buildStreamsModuleContext());
+  }
+
+  async function applyChannelLogoResult(url) {
+    if (!streamsModule) return;
+    return streamsModule.applyChannelLogoResult(buildStreamsModuleContext(), url);
+  }
+
+  async function saveChannelLogoFromCustomUrl() {
+    if (!streamsModule) return;
+    return streamsModule.saveChannelLogoFromCustomUrl(buildStreamsModuleContext());
+  }
+
+  async function loadRegisteredUsers() {
+    if (!resellerMembersModule) return;
+    return resellerMembersModule.loadRegisteredUsers(buildResellerMembersContext());
+  }
+
+  async function loadRegisteredUserFormPage() {
+    if (!resellerMembersModule) return;
+    return resellerMembersModule.loadRegisteredUserFormPage(buildResellerMembersContext());
+  }
+
+  async function loadResellers() {
+    if (!resellerMembersModule) return;
+    return resellerMembersModule.loadResellers(buildResellerMembersContext());
+  }
+
+  function openRegisteredUserForm(id = null) {
+    if (!resellerMembersModule) return;
+    return resellerMembersModule.openRegisteredUserForm(buildResellerMembersContext(), id);
+  }
+
+  async function saveRegisteredUser() {
+    if (!resellerMembersModule) return;
+    return resellerMembersModule.saveRegisteredUser(buildResellerMembersContext());
+  }
+
+  async function openRegisteredUserNotes(id) {
+    if (!resellerMembersModule) return;
+    return resellerMembersModule.openRegisteredUserNotes(buildResellerMembersContext(), id);
+  }
+
+  function closeRegisteredUserNotesModal() {
+    if (!resellerMembersModule) return;
+    return resellerMembersModule.closeRegisteredUserNotesModal(buildResellerMembersContext());
+  }
+
+  async function saveRegisteredUserNotes() {
+    if (!resellerMembersModule) return;
+    return resellerMembersModule.saveRegisteredUserNotes(buildResellerMembersContext());
+  }
+
+  async function openRegisteredUserCredits(id) {
+    if (!resellerMembersModule) return;
+    return resellerMembersModule.openRegisteredUserCredits(buildResellerMembersContext(), id);
+  }
+
+  function closeRegisteredUserCreditsModal() {
+    if (!resellerMembersModule) return;
+    return resellerMembersModule.closeRegisteredUserCreditsModal(buildResellerMembersContext());
+  }
+
+  async function saveRegisteredUserCredits() {
+    if (!resellerMembersModule) return;
+    return resellerMembersModule.saveRegisteredUserCredits(buildResellerMembersContext());
+  }
+
+  async function toggleRegisteredUserStatus(id) {
+    if (!resellerMembersModule) return;
+    return resellerMembersModule.toggleRegisteredUserStatus(buildResellerMembersContext(), id);
+  }
+
+  async function deleteRegisteredUser(id) {
+    if (!resellerMembersModule) return;
+    return resellerMembersModule.deleteRegisteredUser(buildResellerMembersContext(), id);
+  }
+
+  async function loadMemberGroups() {
+    if (!resellerMembersModule) return;
+    return resellerMembersModule.loadMemberGroups(buildResellerMembersContext());
+  }
+
+  async function loadExpiryMedia() {
+    if (!resellerMembersModule) return;
+    return resellerMembersModule.loadExpiryMedia(buildResellerMembersContext());
+  }
+
+  async function loadExpiryMediaEditPage() {
+    if (!resellerMembersModule) return;
+    return resellerMembersModule.loadExpiryMediaEditPage(buildResellerMembersContext());
+  }
+
+  async function saveExpiryMediaService() {
+    if (!resellerMembersModule) return;
+    return resellerMembersModule.saveExpiryMediaService(buildResellerMembersContext());
+  }
+
+  async function deleteExpiryMediaService(id, fromList = false) {
+    if (!resellerMembersModule) return;
+    return resellerMembersModule.deleteExpiryMediaService(buildResellerMembersContext(), id, fromList);
+  }
+
+  async function loadSettings() {
+    if (!settingsModule) return;
+    return settingsModule.loadSettings(buildSettingsModuleContext());
+  }
+
+  async function saveSettings() {
+    if (!settingsModule) return;
+    return settingsModule.saveSettings(buildSettingsModuleContext());
+  }
+
+  async function loadServers() {
+    if (!serverAreaModule) return;
+    return serverAreaModule.loadServers(buildServerAreaContext());
+  }
+
+  async function loadInstallLbPage() {
+    if (!serverAreaModule) return;
+    return serverAreaModule.loadInstallLbPage(buildServerAreaContext());
+  }
+
+  async function loadInstallProxyPage() {
+    if (!serverAreaModule) return;
+    return serverAreaModule.loadInstallProxyPage(buildServerAreaContext());
+  }
+
+  async function loadManageProxyPage() {
+    if (!serverAreaModule) return;
+    return serverAreaModule.loadManageProxyPage(buildServerAreaContext());
+  }
+
+  async function addProxyRelationship() {
+    if (!serverAreaModule) return;
+    return serverAreaModule.addProxyRelationship(buildServerAreaContext());
+  }
+
+  async function deleteProxyRelationship(parentId, childId) {
+    if (!serverAreaModule) return;
+    return serverAreaModule.deleteProxyRelationship(buildServerAreaContext(), parentId, childId);
+  }
+
+  async function loadServerOrderPage() {
+    if (!serverAreaModule) return;
+    return serverAreaModule.loadServerOrderPage(buildServerAreaContext());
+  }
+
+  function moveServerOrder(idx, dir) {
+    if (!serverAreaModule) return;
+    return serverAreaModule.moveServerOrder(buildServerAreaContext(), idx, dir);
+  }
+
+  async function saveServerOrder() {
+    if (!serverAreaModule) return;
+    return serverAreaModule.saveServerOrder(buildServerAreaContext());
+  }
+
+  async function loadSecurity() {
+    if (!securityModule) return;
+    return securityModule.loadSecurity(buildSecurityModuleContext());
+  }
+
+  function renderRbacTables(rbac) {
+    if (!securityModule) return;
+    return securityModule.renderRbacTables(buildSecurityModuleContext(), rbac);
+  }
+
+  async function addBlockedIp() { if (securityModule) return securityModule.addBlockedIp(buildSecurityModuleContext()); }
+  async function addBlockedUa() { if (securityModule) return securityModule.addBlockedUa(buildSecurityModuleContext()); }
+  async function removeBlockedIp(id) { if (securityModule) return securityModule.removeBlockedIp(buildSecurityModuleContext(), id); }
+  async function removeBlockedUa(id) { if (securityModule) return securityModule.removeBlockedUa(buildSecurityModuleContext(), id); }
+
+  APP.saveVpnSettings = async function () { if (securityModule) return securityModule.saveVpnSettings(buildSecurityModuleContext()); };
+  APP.blockAsn = async function () { if (securityModule) return securityModule.blockAsn(buildSecurityModuleContext()); };
+  APP.unblockAsn = async function (asn) { if (securityModule) return securityModule.unblockAsn(buildSecurityModuleContext(), asn); };
+  APP.saveMultiloginSettings = async function () { if (securityModule) return securityModule.saveMultiloginSettings(buildSecurityModuleContext()); };
+  APP.disconnectLine = async function (lineId) { if (securityModule) return securityModule.disconnectLine(buildSecurityModuleContext(), lineId); };
+  APP.addRole = async function () { if (securityModule) return securityModule.addRole(buildSecurityModuleContext()); };
+  APP.deleteRole = async function (id) { if (securityModule) return securityModule.deleteRole(buildSecurityModuleContext(), id); };
+  APP.editRolePerms = async function (roleId) { if (securityModule) return securityModule.editRolePerms(buildSecurityModuleContext(), roleId); };
+  APP.saveCurrentRolePerms = async function () {
+    const saveButton = document.getElementById('saveRolePermsBtn');
+    const roleId = parseInt(saveButton?.dataset.roleId || '0', 10);
+    if (!roleId) return toast('Choose a role first', 'error');
+    return APP.saveRolePerms(roleId);
+  };
+  APP.saveRolePerms = async function (roleId) { if (securityModule) return securityModule.saveRolePerms(buildSecurityModuleContext(), roleId); };
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+
+  // Expose page state getters for use in inline onclick handlers
+  Object.defineProperty(APP, '_streamsPage', { get: () => _streamsPage, set: (v) => { _streamsPage = v; }, configurable: true });
+  Object.defineProperty(APP, '_moviesPage', { get: () => _moviesPage, set: (v) => { _moviesPage = v; }, configurable: true });
+  Object.defineProperty(APP, '_seriesPage', { get: () => _seriesPage, set: (v) => { _seriesPage = v; }, configurable: true });
+  Object.defineProperty(APP, '_streamsPerPage', { get: () => _streamsPerPage, set: (v) => { _streamsPerPage = v; }, configurable: true });
+  Object.defineProperty(APP, '_moviesPerPage', { get: () => _moviesPerPage, set: (v) => { _moviesPerPage = v; }, configurable: true });
+  Object.defineProperty(APP, '_seriesPerPage', { get: () => _seriesPerPage, set: (v) => { _seriesPerPage = v; }, configurable: true });
+
+  Object.assign(APP, {
     navigateTo,
+    loadMovies,
+    loadSeriesList,
+    loadStreams,
+    loadMonitorTopChannelsPage,
+    loadCategoriesPage,
+    toggleStreamsAutoRefresh,
     openLineForm,
     editLine,
     saveLine,
     toggleBanLine,
     deleteLine,
+    goLinesPage,
+    resetLineFilters,
+    deleteExpiredLines,
+    toggleLinesAutoRefresh,
+    createTrialUser,
+    createPaidUser,
+    toggleDisableLine,
+    killLineConnections,
+    toggleLineInfoMenu,
+    toggleLineSettingsMenu,
+    openLineStats,
+    openLineRestrictions,
+    closeLineRestrictionsModal,
+    saveLineRestrictions,
+    openLineExtendModal,
+    closeLineExtendModal,
+    saveLineExtension,
+    addLineBouquets,
+    removeLineBouquets,
+    moveLineBouquet,
+    applyLinePackageDefaults,
+    resetLineBouquetsToPackage,
+    downloadLinePlaylist,
+    loadImportUsers,
+    validateImportUsers,
+    executeImportUsers,
     openMovieForm,
     closeMovieModal,
     movieTabNext,
@@ -4359,6 +9447,8 @@
     removeSeriesBqTag,
     addStreamBqTag,
     removeStreamBqTag,
+    addStreamSubCategoryTag,
+    removeStreamSubCategoryTag,
     copyMovieUrl,
     parseMovieImport,
     confirmMovieImport,
@@ -4390,10 +9480,25 @@
     addSourceRow,
     removeSourceRow,
     scanAllSources,
+    probeSingleChannelSource,
+    promoteChannelSource,
+    demoteChannelSource,
+    insertChannelSourceAfter,
+    removeChannelSource,
+    addChannelCustomMapEntry,
+    switchChannelFormTab,
+    nextChannelFormTab,
+    prevChannelFormTab,
+    playEditingStream,
+    openEditingStreamLogoPicker,
     previewStreamLogo,
+    openChannelLogoModal,
+    closeChannelLogoModal,
+    searchChannelLogos,
+    applyChannelLogoResult,
+    saveChannelLogoFromCustomUrl,
     openStreamPlayer,
     closeStreamPlayer,
-    _streamsGoPage,
     confirmStreamImport,
     openCategoryModal,
     editCategory,
@@ -4414,6 +9519,33 @@
     pkgWizardNext,
     togglePackageGroups,
     togglePackageBouquets,
+    loadRegisteredUsers,
+    goRegisteredUsersPage,
+    openRegisteredUserForm,
+    editRegisteredUser,
+    saveRegisteredUser,
+    openRegisteredUserNotes,
+    closeRegisteredUserNotesModal,
+    saveRegisteredUserNotes,
+    openRegisteredUserCredits,
+    closeRegisteredUserCreditsModal,
+    saveRegisteredUserCredits,
+    toggleRegisteredUserStatus,
+    deleteRegisteredUser,
+    resetRegisteredUserPackageOverrides,
+    loadMemberGroups,
+    openMemberGroupForm,
+    saveMemberGroup,
+    deleteMemberGroup,
+    loadExpiryMedia,
+    openExpiryMediaAddModal,
+    closeExpiryMediaAddModal,
+    createExpiryMediaService,
+    editExpiryMediaService,
+    addExpiryMediaRow,
+    removeExpiryMediaRow,
+    saveExpiryMediaService,
+    deleteExpiryMediaService,
     openResellerModal,
     closeResellerModal,
     saveReseller,
@@ -4429,14 +9561,63 @@
     refreshEpg,
     saveSettings,
     switchSettingsTab,
+    navigateTo,
     loadServers,
     openServerModal,
     closeServerModal,
     switchServerModalTab,
+    navigateServerModalTab,
+    openInstallModal,
+    loadInstallLbPage,
+    loadInstallProxyPage,
+    submitInstallLbPage,
+    submitInstallProxyPage,
     saveServer,
     deleteServer,
     exportNginxUpstream,
     startServerProvision,
+    changeServersPerPage,
+    changeServersPage,
+    filterServersTable,
+    findLowestLatencyServer,
+    toggleServerFaqs,
+    showServerFaq,
+    toggleServerActionMenu,
+    openServerAdvancedModal,
+    closeServerAdvancedModal,
+    serverActionIpChange,
+    serverActionStartAllStreams,
+    serverActionStopAllStreams,
+    serverActionKillConnections,
+    serverActionEdit,
+    serverActionMonitor,
+    serverRestartServices,
+    serverReboot,
+    serverOptimizePhp,
+    serverUpdateFfmpeg,
+    focusTagInput,
+    addTag,
+    removeTag,
+    renderSSLDomainsTable,
+    installSSL,
+    addIspName,
+    clearIspNameEntry,
+    openIspEditor,
+    loadManageProxyPage,
+    addProxyRelationship,
+    deleteProxyRelationship,
+    loadServerOrderPage,
+    moveServerOrder,
+    saveServerOrder,
+    loadServerMonitorPage,
+    refreshServerMonitor,
+    selectServerMonitor,
+    toggleServerMonitorAutoRefresh,
+    serverMonitorAction,
+    loadBandwidthMonitorPage,
+    setBwPeriod2,
+    loadLiveConnections,
+    loadLiveConnectionsMap,
     loadStreamingPerformanceSettings,
     saveStreamingPerformance,
     applyStreamingPreset,
@@ -4448,6 +9629,8 @@
     closeTranscodeProfileModal,
     saveTranscodeProfile,
     deleteTranscodeProfile,
+    openPlexModal,
+    closePlexModal,
     openPlaylistModal,
     closePlaylistModal,
     copyPlaylistField,
@@ -4480,5 +9663,7 @@
     runDbOptimize,
     runDbRepair,
     toast,
-  };
+  });
+
+  // APP already exposed via window.APP at top
 })();

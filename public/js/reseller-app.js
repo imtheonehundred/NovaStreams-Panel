@@ -6,8 +6,67 @@
   let _packages = [];
   let _bouquets = [];
   let _profile = null;
+  let _expiryMediaService = null;
+
+  // CSRF token management
+  let _csrfToken = null;
+  let _csrfTokenPromise = null;
+
+  async function getCsrfToken() {
+    if (_csrfToken) return _csrfToken;
+    if (_csrfTokenPromise) return _csrfTokenPromise;
+    _csrfTokenPromise = (async () => {
+      try {
+        const res = await fetch('/api/auth/csrf-token', {
+          method: 'GET',
+          credentials: 'same-origin',
+        });
+        if (res.ok) {
+          const data = await res.json();
+          _csrfToken = data.csrfToken;
+          return _csrfToken;
+        }
+      } catch (e) {
+        console.warn('[CSRF] Failed to fetch token:', e.message);
+      } finally {
+        _csrfTokenPromise = null;
+      }
+      return null;
+    })();
+    return _csrfTokenPromise;
+  }
+
+  async function addCsrfHeaders(opts) {
+    const method = (opts.method || 'GET').toUpperCase();
+    // Only add CSRF for state-changing methods
+    if (!['POST', 'PUT', 'DELETE', 'PATCH'].includes(method)) return;
+    const token = await getCsrfToken();
+    if (token) {
+      opts.headers = opts.headers || {};
+      opts.headers['X-CSRF-Token'] = token;
+    }
+  }
+
+  /**
+   * Check if a 403 error should trigger logout.
+   * CSRF validation errors should NOT trigger logout.
+   */
+  function shouldLogoutOn403(errorMsg) {
+    if (!errorMsg) return false;
+    const msg = String(errorMsg).toLowerCase();
+    // Explicitly DO NOT logout on CSRF errors - user just needs to refresh page
+    if (msg.includes('csrf')) return false;
+    // Explicitly DO NOT logout on validation/business rule errors
+    const nonAuthPatterns = ['validation failed', 'already exists', 'not found', 'invalid input'];
+    if (nonAuthPatterns.some(pattern => msg.includes(pattern))) return false;
+    if (msg === 'forbidden') return true;
+    // Logout only on true auth failures
+    const authPatterns = ['unauthorized', 'authentication failed', 'invalid username or password', 'access code invalid', 'account disabled'];
+    return authPatterns.some(pattern => msg.includes(pattern));
+  }
 
   async function apiFetch(path, opts = {}) {
+    await addCsrfHeaders(opts);
     const res = await fetch(API + path, {
       ...opts,
       headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
@@ -19,7 +78,22 @@
     if (raw && isJson) {
       try { data = JSON.parse(raw); } catch {}
     }
-    if (res.status === 401 || res.status === 403) { showLogin(); throw new Error((data && data.error) || 'unauthorized'); }
+
+    // Handle 401 as explicit auth failure
+    if (res.status === 401) {
+      showLogin();
+      throw new Error((data && data.error) || 'unauthorized');
+    }
+
+    // Handle 403 - only logout on true auth failures, not CSRF/validation errors
+    if (res.status === 403) {
+      const errorMsg = (data && data.error) || '';
+      if (shouldLogoutOn403(errorMsg)) {
+        showLogin();
+      }
+      throw new Error(errorMsg || 'forbidden');
+    }
+
     if (!isJson) throw new Error(`Unexpected non-JSON response (${res.status})`);
     if (!res.ok) throw new Error((data && data.error) || 'Request failed');
     return data;
@@ -63,6 +137,24 @@
     return `<span style="color:${color}">${days}d</span>`;
   }
 
+  function applyResellerProfileState(profile) {
+    _profile = profile || null;
+    const expiryNav = $('#expiryMediaNav');
+    if (expiryNav) expiryNav.style.display = profile && Number(profile.manage_expiry_media) === 1 ? '' : 'none';
+    const announcementWrap = $('#dashAnnouncement');
+    const announcementBody = $('#dashAnnouncementBody');
+    const html = profile && profile.notice_html ? String(profile.notice_html).trim() : '';
+    if (announcementWrap && announcementBody) {
+      if (html) {
+        announcementBody.innerHTML = html;
+        announcementWrap.style.display = '';
+      } else {
+        announcementBody.innerHTML = '';
+        announcementWrap.style.display = 'none';
+      }
+    }
+  }
+
   // ─── Auth ────────────────────────────────────────────────────────
 
   function showLogin() {
@@ -84,12 +176,14 @@
     const user = $('#loginUser').value.trim();
     const pass = $('#loginPass').value;
     try {
-      const res = await fetch('/api/auth/login', {
+      const opts = {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
         body: JSON.stringify({ username: user, password: pass }),
-      });
+      };
+      await addCsrfHeaders(opts);
+      const res = await fetch('/api/auth/login', opts);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Login failed');
       if (data.role && data.role !== 'reseller') throw new Error('This account must use admin access code URL');
@@ -121,7 +215,9 @@
   }
 
   async function doLogout() {
-    await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
+    const opts = { method: 'POST', credentials: 'same-origin' };
+    await addCsrfHeaders(opts);
+    await fetch('/api/auth/logout', opts);
     showLogin();
   }
 
@@ -138,22 +234,24 @@
     const link = $(`.nav-link[data-page="${page}"]`);
     if (link) link.classList.add('active');
 
-    const loaders = { dashboard: loadDashboard, lines: loadLines, profile: loadProfile };
+    const loaders = { dashboard: loadDashboard, lines: loadLines, profile: loadProfile, 'expiry-media': loadExpiryMedia };
     if (loaders[page]) loaders[page]();
   }
 
   async function loadRefData() {
     try {
-      const [pkgData, bqData, credData] = await Promise.all([
+      const [pkgData, bqData, credData, profile] = await Promise.all([
         apiFetch('/packages'),
         apiFetch('/bouquets'),
         apiFetch('/credits'),
+        apiFetch('/profile'),
       ]);
       _packages = pkgData.packages || [];
       _bouquets = bqData.bouquets || [];
       if (credData.credits !== undefined) {
         $('#topbarCredits').textContent = `Credits: ${credData.credits}`;
       }
+      applyResellerProfileState(profile || null);
     } catch {}
   }
 
@@ -171,10 +269,12 @@
 
   async function loadDashboard() {
     try {
-      const [credData, linesData] = await Promise.all([
+      const [credData, linesData, profile] = await Promise.all([
         apiFetch('/credits'),
         apiFetch('/lines'),
+        apiFetch('/profile'),
       ]);
+      applyResellerProfileState(profile || null);
       const lines = linesData.lines || [];
       const now = Math.floor(Date.now() / 1000);
       const active = lines.filter(l => l.admin_enabled === 1 && (!l.exp_date || l.exp_date >= now)).length;
@@ -229,6 +329,7 @@
         return true;
       });
       const tbody = $('#linesTable tbody');
+      const canDelete = _profile && Number(_profile.delete_users) === 1;
       tbody.innerHTML = filtered.map(l => {
         const badge = lineStatusBadge(l);
         const activeCons = l.active_cons || 0;
@@ -244,7 +345,7 @@
           <td><span style="color:${connColor}">${activeCons}</span> / ${maxCons}</td>
           <td>
             <button class="btn btn-xs btn-secondary" onclick="RSL.openPlaylistModal('${escHtml(l.username || '')}', '${escHtml(l.password || '')}')">Playlist</button>
-            <button class="btn btn-xs btn-danger" onclick="RSL.deleteLine(${l.id})">Del</button>
+            ${canDelete ? `<button class="btn btn-xs btn-danger" onclick="RSL.deleteLine(${l.id})">Del</button>` : ''}
           </td>
         </tr>`;
       }).join('');
@@ -309,6 +410,8 @@
       navigateTo('lines');
     } catch (e) {
       if (e.message === 'insufficient_credits') toast('Not enough credits', 'error');
+      else if (e.message === 'trial_limit_exceeded') toast('Trial generation limit reached for your group', 'error');
+      else if (e.message === 'package_forbidden') toast('This package is not available to your member group', 'error');
       else toast(e.message, 'error');
     }
   }
@@ -330,10 +433,11 @@
         apiFetch('/profile'),
         apiFetch('/credits'),
       ]);
-      _profile = profile;
+      applyResellerProfileState(profile || null);
       $('#profileInfo').innerHTML = `
         <div class="form-row"><label>Username</label><div class="form-input"><strong>${escHtml(profile.username || '')}</strong></div></div>
         <div class="form-row"><label>Email</label><div class="form-input"><strong>${escHtml(profile.email || '-')}</strong></div></div>
+        <div class="form-row"><label>Member Group</label><div class="form-input"><strong>${escHtml(profile.group_name || '-')}</strong></div></div>
         <div class="form-row"><label>Credits</label><div class="form-input"><strong style="color:#3fb950;font-size:1.2em">${credData.credits || 0}</strong></div></div>
       `;
       const logs = credData.logs || [];
@@ -342,6 +446,88 @@
         <td>${escHtml(log.reason || '')}</td>
         <td>${formatDate(log.date)}</td>
       </tr>`).join('');
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+  function buildExpiryRow(item = {}) {
+    return `<div class="input-with-btn" style="margin-bottom:8px"><input type="text" class="form-control rem-country" placeholder="Country code (blank = default)" value="${escHtml(item.country_code || '')}" style="max-width:180px"><input type="text" class="form-control rem-url" placeholder="https://example.com/media.m3u8" value="${escHtml(item.media_url || '')}"><button class="btn btn-xs btn-danger" onclick="RSL.removeExpiryRow(this)">X</button></div>`;
+  }
+
+  function renderExpiryRows(items = []) {
+    const expiringWrap = $('#rslExpiryExpiringRows');
+    const expiredWrap = $('#rslExpiryExpiredRows');
+    if (expiringWrap) {
+      const rows = (items || []).filter((item) => item.scenario === 'expiring');
+      expiringWrap.innerHTML = (rows.length ? rows : [{}]).map((item) => buildExpiryRow(item)).join('');
+    }
+    if (expiredWrap) {
+      const rows = (items || []).filter((item) => item.scenario === 'expired');
+      expiredWrap.innerHTML = (rows.length ? rows : [{}]).map((item) => buildExpiryRow(item)).join('');
+    }
+  }
+
+  function collectExpiryRows(selector, scenario) {
+    const wrap = $(selector);
+    if (!wrap) return [];
+    return [...wrap.querySelectorAll('.input-with-btn')]
+      .map((row, index) => ({
+        scenario,
+        country_code: row.querySelector('.rem-country')?.value || '',
+        media_url: row.querySelector('.rem-url')?.value || '',
+        sort_order: index,
+      }))
+      .filter((item) => String(item.media_url || '').trim());
+  }
+
+  async function loadExpiryMedia() {
+    try {
+      const profile = _profile || await apiFetch('/profile');
+      applyResellerProfileState(profile || null);
+      if (!profile || Number(profile.manage_expiry_media) !== 1) {
+        $('#expiryMediaDenied').style.display = '';
+        $('#expiryMediaEditorCard').style.display = 'none';
+        return;
+      }
+      $('#expiryMediaDenied').style.display = 'none';
+      $('#expiryMediaEditorCard').style.display = '';
+      const data = await apiFetch('/expiry-media');
+      _expiryMediaService = data.service || null;
+      $('#rslExpiryActive').checked = !_expiryMediaService || Number(_expiryMediaService.active) === 1;
+      $('#rslExpiryWindowDays').value = String(_expiryMediaService && _expiryMediaService.warning_window_days || 7);
+      $('#rslExpiryRepeatHours').value = String(_expiryMediaService && _expiryMediaService.repeat_interval_hours || 6);
+      renderExpiryRows(data.items || []);
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+  function addExpiryRow(scenario) {
+    const wrap = scenario === 'expiring' ? $('#rslExpiryExpiringRows') : $('#rslExpiryExpiredRows');
+    if (!wrap) return;
+    wrap.insertAdjacentHTML('beforeend', buildExpiryRow({}));
+  }
+
+  function removeExpiryRow(btn) {
+    const row = btn && btn.parentElement;
+    const wrap = row && row.parentElement;
+    if (row) row.remove();
+    if (wrap && !wrap.querySelector('.input-with-btn')) wrap.insertAdjacentHTML('beforeend', buildExpiryRow({}));
+  }
+
+  async function saveExpiryMedia() {
+    try {
+      await apiFetch('/expiry-media', {
+        method: 'PUT',
+        body: JSON.stringify({
+          active: $('#rslExpiryActive').checked ? 1 : 0,
+          warning_window_days: parseInt($('#rslExpiryWindowDays').value || '7', 10) || 7,
+          repeat_interval_hours: parseInt($('#rslExpiryRepeatHours').value || '6', 10) || 6,
+          items: [
+            ...collectExpiryRows('#rslExpiryExpiringRows', 'expiring'),
+            ...collectExpiryRows('#rslExpiryExpiredRows', 'expired'),
+          ],
+        }),
+      });
+      toast('Expiry media updated');
+      loadExpiryMedia();
     } catch (e) { toast(e.message, 'error'); }
   }
 
@@ -400,6 +586,10 @@
     openLineForm,
     saveLine,
     deleteLine,
+    loadExpiryMedia,
+    saveExpiryMedia,
+    addExpiryRow,
+    removeExpiryRow,
     openPlaylistModal,
     closePlaylistModal,
     copyField,

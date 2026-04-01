@@ -18,13 +18,16 @@ function parseJsonField(raw, fallback) {
 
 function normalizeLineRow(row) {
   if (!row) return null;
-  return {
+  const normalized = {
     ...row,
     bouquet: parseJsonField(row.bouquet, []),
     allowed_outputs: parseJsonField(row.allowed_outputs, []),
     allowed_ips: parseJsonField(row.allowed_ips, []),
     allowed_ua: parseJsonField(row.allowed_ua, []),
   };
+  delete normalized.password_hash;
+  delete normalized.password_enc;
+  return normalized;
 }
 
 function durationToSeconds(amount, unit) {
@@ -34,24 +37,24 @@ function durationToSeconds(amount, unit) {
   return n * (multipliers[u] ?? multipliers.day);
 }
 
-function computeExpDateFromPackage(pkg) {
+function computeExpDateFromPackage(pkg, isTrialOverride) {
   const now = Math.floor(Date.now() / 1000);
-  const isTrial = pkg.is_trial === 1;
+  const isTrial = isTrialOverride !== undefined ? Number(isTrialOverride) === 1 : pkg.is_trial === 1;
   const duration = isTrial ? pkg.trial_duration : pkg.official_duration;
   const unit = isTrial ? pkg.trial_duration_in : pkg.official_duration_in;
   return now + durationToSeconds(duration, unit);
 }
 
 function applyPackageDefaults(draft, pkg) {
-  draft.bouquet = parseJsonField(pkg.bouquets_json, []);
-  draft.allowed_outputs = parseJsonField(pkg.output_formats_json, []);
-  draft.max_connections = pkg.max_connections ?? 1;
-  draft.forced_country = pkg.forced_country || '';
-  draft.is_trial = pkg.is_trial ?? 0;
-  draft.is_mag = pkg.is_mag ?? 0;
-  draft.is_e2 = pkg.is_e2 ?? 0;
-  draft.is_restreamer = pkg.is_restreamer ?? 0;
-  if (draft.exp_date === undefined) draft.exp_date = computeExpDateFromPackage(pkg);
+  if (draft.bouquet === undefined) draft.bouquet = parseJsonField(pkg.bouquets_json, []);
+  if (draft.allowed_outputs === undefined) draft.allowed_outputs = parseJsonField(pkg.output_formats_json, []);
+  if (draft.max_connections === undefined || draft.max_connections === null) draft.max_connections = pkg.max_connections ?? 1;
+  if (draft.forced_country === undefined) draft.forced_country = pkg.forced_country || '';
+  if (draft.is_trial === undefined) draft.is_trial = pkg.is_trial ?? 0;
+  if (draft.is_mag === undefined) draft.is_mag = pkg.is_mag ?? 0;
+  if (draft.is_e2 === undefined) draft.is_e2 = pkg.is_e2 ?? 0;
+  if (draft.is_restreamer === undefined) draft.is_restreamer = pkg.is_restreamer ?? 0;
+  if (draft.exp_date === undefined) draft.exp_date = computeExpDateFromPackage(pkg, draft.is_trial);
 }
 
 async function createLine(data, memberId) {
@@ -69,12 +72,12 @@ async function createLine(data, memberId) {
 
 async function authenticateLine(username, password) {
   const line = await dbApi.getLineByUsername(String(username));
-  if (!line || String(line.password) !== String(password)) return { ok: false, line: null, error_code: 'INVALID' };
+  if (!line || !(await dbApi.verifyLinePassword(line, password))) return { ok: false, line: null, error_code: 'INVALID' };
   if (line.admin_enabled === 0) return { ok: false, line, error_code: 'BANNED' };
   if (line.enabled === 0) return { ok: false, line, error_code: 'DISABLED' };
   const now = Math.floor(Date.now() / 1000);
   if (line.exp_date != null && line.exp_date !== '' && Number(line.exp_date) < now) return { ok: false, line, error_code: 'EXPIRED' };
-  return { ok: true, line, error_code: null };
+  return { ok: true, line: { ...line, password: String(password) }, error_code: null };
 }
 
 // ─── Redis-based connection tracking ─────────────────────────────────
@@ -127,6 +130,14 @@ async function closeConnection(lineId, uuid) {
   return true;
 }
 
+async function killConnections(lineId) {
+  const conns = await getActiveConnections(lineId);
+  for (const conn of conns) {
+    await closeConnection(lineId, conn.uuid);
+  }
+  return conns.length;
+}
+
 async function countLiveConnections(lineId) {
   const r = redis.getClient();
   return await r.scard(connSetKey(lineId));
@@ -159,6 +170,63 @@ async function canConnect(lineId) {
   const max = parseInt(line.max_connections, 10) || 1;
   const current = await countLiveConnections(lineId);
   return current < max;
+}
+
+// ─── Phase 4 — Live Runtime Session helpers ─────────────────────────
+
+/**
+ * Open a runtime session record for a line viewing a live channel on a remote node.
+ * Wraps dbApi.openRuntimeSession().
+ *
+ * @param {Object} opts
+ * @param {number} opts.lineId
+ * @param {string} opts.streamType  — 'live'
+ * @param {string|number} opts.streamId  — channel id
+ * @param {number} [opts.placementId]
+ * @param {number} [opts.originServerId]
+ * @param {number} [opts.proxyServerId]
+ * @param {string} [opts.container]  — 'ts' or 'm3u8'
+ * @param {string} [opts.sessionUuid]
+ * @param {string} [opts.playbackToken]
+ * @param {string} [opts.userIp]
+ * @param {string} [opts.userAgent]
+ * @param {string} [opts.geoipCountryCode]
+ * @param {string} [opts.isp]
+ * @returns {Promise<number>}  inserted row id
+ */
+async function openRuntimeSession({ lineId, streamType, streamId, placementId, originServerId, proxyServerId, container, sessionUuid, playbackToken, userIp, userAgent, geoipCountryCode, isp }) {
+  return await dbApi.openRuntimeSession({
+    lineId,
+    streamType,
+    streamId,
+    placementId,
+    originServerId,
+    proxyServerId,
+    container,
+    sessionUuid,
+    playbackToken,
+    userIp,
+    userAgent,
+    geoipCountryCode,
+    isp,
+  });
+}
+
+/**
+ * Touch a runtime session to record a keep-alive (updates last_seen_at).
+ * @param {string} sessionUuid
+ */
+async function touchRuntimeSession(sessionUuid) {
+  await dbApi.touchRuntimeSession(sessionUuid);
+}
+
+/**
+ * Close a runtime session (sets date_end).
+ * @param {string} sessionUuid
+ * @param {number} [dateEnd]  — unix timestamp; defaults to now
+ */
+async function closeRuntimeSession(sessionUuid, dateEnd) {
+  await dbApi.closeRuntimeSession(sessionUuid, dateEnd);
 }
 
 // ─── Permission checks ──────────────────────────────────────────────
@@ -244,6 +312,7 @@ async function listAll(memberId, limit, offset) {
 }
 
 async function update(id, data) {
+  if (data && data.password !== undefined && !String(data.password || '')) throw new Error('password required');
   await dbApi.updateLine(id, data);
   return await dbApi.getLineById(id);
 }
@@ -264,6 +333,7 @@ module.exports = {
   isStreamInBouquet,
   openConnection,
   closeConnection,
+  killConnections,
   countLiveConnections,
   getActiveConnections,
   refreshConnection,
@@ -272,4 +342,8 @@ module.exports = {
   update,
   remove,
   normalizeLineRow,
+  // Phase 4 — live runtime sessions
+  openRuntimeSession,
+  touchRuntimeSession,
+  closeRuntimeSession,
 };

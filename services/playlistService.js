@@ -44,7 +44,7 @@ async function categoryNameFor(categoryId) {
   return c.category_name || String(categoryId);
 }
 
-async function buildLiveSection(line, resolveBaseUrl, output, type, key, allowedSet, radioSet, catNameMap) {
+async function buildLiveSection(line, resolveAssetBaseUrl, output, type, key, allowedSet, radioSet, catNameMap) {
   const u = encodeURIComponent(line.username);
   const p = encodeURIComponent(line.password);
   const lines = [];
@@ -73,8 +73,7 @@ async function buildLiveSection(line, resolveBaseUrl, output, type, key, allowed
   });
 
   for (const it of items) {
-    const assetSid = it.ch.stream_server_id != null ? parseInt(it.ch.stream_server_id, 10) : 0;
-    const baseUrl = await resolveBaseUrl(Number.isFinite(assetSid) && assetSid > 0 ? assetSid : 0);
+    const baseUrl = await resolveAssetBaseUrl('live', it.id);
     const url = `${baseUrl}/live/${u}/${p}/${it.id}.${output}`;
     lines.push(type === 'm3u_plus'
       ? `#EXTINF:-1 tvg-id="${escAttr(it.epgId)}" tvg-name="${escAttr(it.name)}" tvg-logo="${escAttr(it.logo)}" group-title="${escAttr(it.groupTitle)}",${it.name}`
@@ -84,7 +83,7 @@ async function buildLiveSection(line, resolveBaseUrl, output, type, key, allowed
   return lines;
 }
 
-async function buildMovieSection(line, resolveBaseUrl, output, type, allowedSet, catNameMap) {
+async function buildMovieSection(line, resolveAssetBaseUrl, output, type, allowedSet, catNameMap) {
   const u = encodeURIComponent(line.username);
   const p = encodeURIComponent(line.password);
   const lines = [];
@@ -98,8 +97,7 @@ async function buildMovieSection(line, resolveBaseUrl, output, type, allowedSet,
       if (!movieAllowed(line, m.id, allowedSet)) continue;
       const ext = (m.container_extension || 'mp4').replace(/^\./, '');
       const outExt = output === 'm3u8' ? 'm3u8' : ext;
-      const assetSid = m.stream_server_id != null ? parseInt(m.stream_server_id, 10) : 0;
-      const baseUrl = await resolveBaseUrl(Number.isFinite(assetSid) && assetSid > 0 ? assetSid : 0);
+      const baseUrl = await resolveAssetBaseUrl('movie', m.id);
       const url = `${baseUrl}/movie/${u}/${p}/${m.id}.${outExt}`;
       const catName = catNameMap.get(String(m.category_id)) || 'Uncategorized';
       const title = m.name || String(m.id);
@@ -115,7 +113,7 @@ async function buildMovieSection(line, resolveBaseUrl, output, type, allowedSet,
   return lines;
 }
 
-async function buildSeriesSection(line, resolveBaseUrl, output, type, allowedSet, catNameMap) {
+async function buildSeriesSection(line, resolveAssetBaseUrl, output, type, allowedSet, catNameMap) {
   const u = encodeURIComponent(line.username);
   const p = encodeURIComponent(line.password);
   const lines = [];
@@ -129,9 +127,8 @@ async function buildSeriesSection(line, resolveBaseUrl, output, type, allowedSet
       if (!seriesAllowed(line, s.id, allowedSet)) continue;
       const eps = await dbApi.listEpisodes(s.id);
       const catName = catNameMap.get(String(s.category_id)) || 'Uncategorized';
-      const assetSid = s.stream_server_id != null ? parseInt(s.stream_server_id, 10) : 0;
-      const seriesBase = await resolveBaseUrl(Number.isFinite(assetSid) && assetSid > 0 ? assetSid : 0);
       for (const ep of eps) {
+        const seriesBase = await resolveAssetBaseUrl('episode', ep.id);
         const ext = (ep.container_extension || 'mp4').replace(/^\./, '');
         const outExt = output === 'm3u8' ? 'm3u8' : ext;
         const url = `${seriesBase}/series/${u}/${p}/${ep.id}.${outExt}`;
@@ -174,6 +171,18 @@ async function generatePlaylist(line, options) {
           return out;
         }
       : async () => fallbackBase;
+  const assetCache = new Map();
+  const resolveAssetBaseUrl =
+    typeof opt.resolveAssetBaseUrl === 'function'
+      ? async (assetType, assetId) => {
+          const k = `${assetType}:${assetId}`;
+          if (assetCache.has(k)) return assetCache.get(k);
+          const u = await opt.resolveAssetBaseUrl(assetType, assetId);
+          const out = stripTrailingSlash(u || fallbackBase);
+          assetCache.set(k, out);
+          return out;
+        }
+      : async (_assetType, _assetId, assetSid = 0) => resolveBaseUrl(assetSid);
 
   const allowedChannelSet = await allowedIdSetFromBouquet(line, bouquetService.getChannelsForBouquets);
   const allowedMovieSet = await allowedIdSetFromBouquet(line, bouquetService.getMoviesForBouquets);
@@ -192,15 +201,15 @@ async function generatePlaylist(line, options) {
 
   // Do not use parts.push(...arr): huge playlists exceed max call stack (spread passes one arg per element).
   if (key == null || key === 'live' || key === 'radio_streams') {
-    const liveLines = await buildLiveSection(line, resolveBaseUrl, output, type, key, allowedChannelSet, radioSet, catNameMap);
+    const liveLines = await buildLiveSection(line, resolveAssetBaseUrl, output, type, key, allowedChannelSet, radioSet, catNameMap);
     for (const ln of liveLines) parts.push(ln);
   }
   if (key == null || key === 'movie') {
-    const movieLines = await buildMovieSection(line, resolveBaseUrl, output, type, allowedMovieSet, catNameMap);
+    const movieLines = await buildMovieSection(line, resolveAssetBaseUrl, output, type, allowedMovieSet, catNameMap);
     for (const ln of movieLines) parts.push(ln);
   }
   if (key == null || key === 'series') {
-    const seriesLines = await buildSeriesSection(line, resolveBaseUrl, output, type, allowedSeriesSet, catNameMap);
+    const seriesLines = await buildSeriesSection(line, resolveAssetBaseUrl, output, type, allowedSeriesSet, catNameMap);
     for (const ln of seriesLines) parts.push(ln);
   }
 

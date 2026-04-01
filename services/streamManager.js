@@ -10,6 +10,8 @@ const {
   STREAM_METADATA_CLEANUP_INTERVAL_MS,
 } = require('../config/constants');
 const { eventBus, WS_EVENTS } = require('./eventBus');
+const dbApi = require('../lib/db');
+const serverService = require('./serverService');
 
 /**
  * PRODUCTION-GRADE STREAM MANAGER
@@ -281,10 +283,99 @@ function listActiveChannels() {
 }
 
 /**
+ * 6. ISSUE REMOTE COMMAND (Phase 3 — command/control plane)
+ *
+ * Creates a server_commands row for a remote node. Does NOT wait for execution.
+ * In current TARGET scope this is limited to command types that are executable
+ * end-to-end, not the broader parity-planning set.
+ *
+ * This function is the orchestration handoff: it checks server health/capability
+ * before queuing, but does not block on the result.
+ *
+ * @param {Object} opts
+ * @param {number} opts.serverId
+ * @param {string} opts.commandType - 'reload_proxy_config'|'restart_services'|'reboot_server'
+ * @param {string} [opts.streamType] - 'live'|'movie'|'episode'
+ * @param {string|number} [opts.streamId]
+ * @param {number} [opts.placementId]
+ * @param {Object} [opts.payload] - arbitrary command payload
+ * @param {number} [opts.issuedByUserId] - user who initiated the command
+ * @returns {Promise<{ok: boolean, commandId?: number, reason?: string}>}
+ */
+async function issueRemoteCommand({ serverId, commandType, streamType, streamId, placementId, payload, issuedByUserId }) {
+  const SUPPORTED_TYPES = [
+    'reload_proxy_config',
+    'restart_services',
+    'reboot_server',
+  ];
+  const DE_SCOPED_TYPES = [
+    'start_stream', 'stop_stream', 'restart_stream',
+    'probe_stream', 'sync_server_config',
+    'reconcile_runtime', 'reconcile_sessions',
+    'sync_proxy_upstream',
+  ];
+  if (DE_SCOPED_TYPES.includes(commandType)) {
+    return { ok: false, reason: `command de-scoped in TARGET: ${commandType}` };
+  }
+  if (!SUPPORTED_TYPES.includes(commandType)) {
+    return { ok: false, reason: `invalid command type: ${commandType}` };
+  }
+
+  // Verify server can receive this command (health + capability check)
+  const check = await serverService.canIssueCommandToServer(serverId, commandType);
+  if (!check.ok) {
+    return { ok: false, reason: check.reason };
+  }
+
+  try {
+    const cmdId = await dbApi.createServerCommand({
+      serverId,
+      streamType: streamType || null,
+      streamId: streamId != null ? String(streamId) : null,
+      placementId: placementId || null,
+      commandType,
+      payload: payload || null,
+      issuedByUserId: issuedByUserId || null,
+    });
+    logSystem('REMOTE_COMMAND_ISSUED', null, { commandId: cmdId, serverId, commandType, streamType, streamId });
+    return { ok: true, commandId: cmdId };
+  } catch (err) {
+    logSystem('REMOTE_COMMAND_ERROR', null, { serverId, commandType, error: err.message });
+    return { ok: false, reason: err.message };
+  }
+}
+
+/**
+ * Phase 08 truth alignment:
+ * remote live runtime ownership remains de-scoped in current TARGET.
+ *
+ * @param {number|string} channelId
+ * @param {number} serverId
+ * @param {number} [issuedByUserId]
+ * @returns {Promise<{ok: boolean, commandId?: number, reason?: string}>}
+ */
+async function startLiveOnRemote(channelId, serverId, issuedByUserId) {
+  return { ok: false, reason: 'remote live runtime is de-scoped in TARGET' };
+}
+
+/**
+ * Phase 08 truth alignment:
+ * remote live runtime ownership remains de-scoped in current TARGET.
+ *
+ * @param {number|string} channelId
+ * @param {number} serverId
+ * @param {number} [issuedByUserId]
+ * @returns {Promise<{ok: boolean, commandId?: number, reason?: string}>}
+ */
+async function stopLiveOnRemote(channelId, serverId, issuedByUserId) {
+  return { ok: false, reason: 'remote live runtime is de-scoped in TARGET' };
+}
+
+/**
  * HEALTH CHECK LOOP
  * Ensures background state syncs perfectly with process reality to prevent ghost UIs.
  */
-setInterval(() => {
+const streamHealthCheckTimer = setInterval(() => {
   for (const [id, proc] of processes.entries()) {
     try {
       // 0 signal ping just verifies process existence. 
@@ -303,12 +394,16 @@ setInterval(() => {
   }
 }, CONFIG.HEALTH_CHECK_INTERVAL_MS);
 
+if (typeof streamHealthCheckTimer.unref === 'function') {
+  streamHealthCheckTimer.unref();
+}
+
 /**
  * BOUNDED STREAM METADATA CLEANUP
  * Prevents memory leaks from orphaned metadata entries when channels crash
  * without cleanup or when processes exit cleanly.
  */
-setInterval(() => {
+const streamMetadataCleanupTimer = setInterval(() => {
   let removed = 0;
   for (const [channelId, meta] of streamMetadata.entries()) {
     const isRunning = processes.has(channelId);
@@ -335,12 +430,28 @@ setInterval(() => {
   }
 }, STREAM_METADATA_CLEANUP_INTERVAL_MS);
 
+if (typeof streamMetadataCleanupTimer.unref === 'function') {
+  streamMetadataCleanupTimer.unref();
+}
+
 
 // Export core interface
+//
+// IMPORTANT: Live runtime lifecycle (startChannel, stopChannel, restartChannel)
+// is owned by server.js. This module provides read-only status access
+// and remote command queuing functions only.
+//
+// startChannel, stopChannel, restartChannel are NOT exported to prevent
+// accidental use of the alternative implementation below, which does not
+// handle all output modes (copy, node, nginx, proxy) supported by
+// the real runtime in server.js.
+//
 module.exports = {
-  startChannel,
-  stopChannel,
-  restartChannel,
+  // Read-only status functions
   getChannelStatus,
-  listActiveChannels
+  listActiveChannels,
+  // Remote command queuing (for server restart/reboot, NOT live stream start/stop)
+  issueRemoteCommand,
+  startLiveOnRemote,
+  stopLiveOnRemote,
 };

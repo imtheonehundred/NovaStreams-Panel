@@ -2,20 +2,55 @@
 
 const express = require('express');
 const dbApi = require('../lib/db');
-const { query: dbQuery, queryOne: dbQueryOne, execute: dbExec } = require('../lib/mariadb');
+const { queryOne: dbQueryOne, execute: dbExec } = require('../lib/mariadb');
 const lineService = require('../services/lineService');
+const { csrfProtection } = require('../middleware/csrf');
 
 const router = express.Router();
 
+function clearPanelUserSession(req, { preserveGateway = true } = {}) {
+  if (!req.session) return;
+  req.session.userId = null;
+  if (!preserveGateway) {
+    req.session.portalRole = null;
+    req.session.accessCode = null;
+    req.session.accessCodeId = null;
+  }
+}
+
+async function validateResellerAccessCodeSession(req) {
+  const session = req.session || null;
+  if (typeof dbApi.getAccessCodeById !== 'function') {
+    return session && session.portalRole === 'reseller' ? { id: session.accessCodeId || null, role: 'reseller', enabled: 1 } : null;
+  }
+  if (!session || !session.accessCodeId || !session.portalRole) {
+    clearPanelUserSession(req, { preserveGateway: false });
+    return null;
+  }
+  const row = await dbApi.getAccessCodeById(session.accessCodeId);
+  const enabled = row && (row.enabled === true || row.enabled === 1 || Number(row.enabled) === 1);
+  if (!row || !enabled || row.role !== 'reseller' || session.portalRole !== 'reseller') {
+    clearPanelUserSession(req, { preserveGateway: false });
+    return null;
+  }
+  if (session.accessCode !== row.code) session.accessCode = row.code;
+  return row;
+}
+
 async function resellerAuth(req, res, next) {
   if (!req.session || !req.session.userId) return res.status(401).json({ error: 'unauthorized' });
-  if (req.session.portalRole && req.session.portalRole !== 'reseller') return res.status(403).json({ error: 'forbidden' });
+  const accessCode = await validateResellerAccessCodeSession(req);
+  if (!accessCode) return res.status(403).json({ error: 'access code invalid' });
+  const user = await dbApi.findUserById(req.session.userId);
+  if (!user || Number(user.status) !== 1) return res.status(403).json({ error: 'account disabled' });
   const isRes = await dbApi.isReseller(req.session.userId);
   if (!isRes) return res.status(403).json({ error: 'forbidden' });
   req.userId = req.session.userId;
   next();
 }
 router.use(resellerAuth);
+// CSRF protection for state-changing requests (POST/PUT/DELETE/PATCH)
+router.use(csrfProtection);
 
 function parseIdParam(v) { const n = parseInt(v, 10); return Number.isFinite(n) ? n : NaN; }
 
@@ -43,7 +78,7 @@ async function createResellerLine(userId, body) {
 router.get('/lines', async (req, res) => {
   try {
     const result = await lineService.listAll(req.userId);
-    const lines = (result.lines || result).map(r => lineService.normalizeLineRow(r));
+    const lines = (result.lines || result).map(r => lineService.normalizeLineRow(dbApi.attachLinePassword(r)));
     res.json({ lines });
   } catch (e) { res.status(500).json({ error: e.message || 'failed' }); }
 });
@@ -51,7 +86,7 @@ router.get('/lines', async (req, res) => {
 router.post('/lines', async (req, res) => {
   try {
     const line = await createResellerLine(req.userId, req.body || {});
-    res.status(201).json(lineService.normalizeLineRow(line));
+    res.status(201).json(lineService.normalizeLineRow(dbApi.attachLinePassword(line)));
   } catch (e) {
     if (e.code === 'insufficient_credits') return res.status(400).json({ error: 'insufficient_credits', required: e.required, balance: e.balance });
     if (e.code === 'user_not_found') return res.status(404).json({ error: 'not found' });
@@ -66,7 +101,7 @@ router.put('/lines/:id', async (req, res) => {
   if (!line || line.member_id !== req.userId) return res.status(404).json({ error: 'not found' });
   try {
     const updated = await lineService.update(id, req.body || {});
-    res.json(lineService.normalizeLineRow(updated));
+    res.json(lineService.normalizeLineRow(dbApi.attachLinePassword(updated)));
   } catch (e) { res.status(400).json({ error: e.message || 'update failed' }); }
 });
 

@@ -23,6 +23,16 @@ function normalizeIp(ip) {
   return ip;
 }
 
+function buildPanelSessionKey(req) {
+  const ip = normalizeIp(req.ip) || 'unknown';
+  if (!req.session) return ip;
+  const userId = req.session.userId ? `u:${req.session.userId}` : null;
+  const role = req.session.portalRole ? `r:${req.session.portalRole}` : null;
+  const accessCodeId = req.session.accessCodeId ? `a:${req.session.accessCodeId}` : null;
+  const parts = [userId, role, accessCodeId].filter(Boolean);
+  return parts.length ? parts.join('|') : ip;
+}
+
 /** Stream endpoints: /live/*, /streams/*, /movie/*, /series/* - 100 req/min per IP */
 const streamLimiter = rateLimit({
   windowMs: STREAM_RATE_WINDOW_MS,
@@ -69,22 +79,17 @@ const authLimiter = rateLimit({
   validate: { ipv6SubnetOrKeyGenerator: false, keyGeneratorIpFallback: false },
 });
 
-/** Admin API: /api/admin/* - 200 req/min per session */
+/** Panel API: authenticated panel/admin requests - 200 req/min per session context */
 const adminLimiter = rateLimit({
   windowMs: ADMIN_RATE_WINDOW_MS,
   max: ADMIN_RATE_MAX,
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: (req) => {
-    // Use session ID if available, else IP
-    return req.session && req.session.id
-      ? req.session.id
-      : (normalizeIp(req.ip) || 'unknown');
-  },
+  keyGenerator: buildPanelSessionKey,
   handler: (req, res) => {
     res.status(429).json({
       error: 'Too many requests',
-      message: 'Admin API rate limit exceeded.',
+      message: 'Panel API rate limit exceeded.',
       retryAfter: Math.ceil(ADMIN_RATE_WINDOW_MS / 1000),
     });
   },

@@ -1,0 +1,25 @@
+#!/usr/bin/env python3
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+
+def main() -> int:
+    panel_dir = Path(__file__).resolve().parent
+    installer = panel_dir / 'scripts' / 'auto_install_ubuntu.sh'
+
+    if not installer.exists():
+        print(f'Installer not found: {installer}', file=sys.stderr)
+        return 1
+
+    env = os.environ.copy()
+    env.setdefault('PANEL_DIR', str(panel_dir))
+
+    os.chmod(installer, 0o755)
+    result = subprocess.run(['bash', str(installer), *sys.argv[1:]], cwd=str(panel_dir), env=env)
+    return result.returncode
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

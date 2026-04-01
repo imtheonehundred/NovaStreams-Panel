@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS `users` (
   `username` VARCHAR(255) NOT NULL,
   `password_hash` VARCHAR(255) NOT NULL,
   `email` VARCHAR(255) DEFAULT '',
+  `notes` TEXT,
   `member_group_id` INT UNSIGNED DEFAULT 1,
   `credits` DECIMAL(12,2) DEFAULT 0.00,
   `status` TINYINT DEFAULT 1,
@@ -49,6 +50,7 @@ CREATE TABLE IF NOT EXISTS `user_groups` (
   `minimum_username_length` INT DEFAULT 8,
   `minimum_password_length` INT DEFAULT 8,
   `allow_change_bouquets` TINYINT DEFAULT 0,
+  `manage_expiry_media` TINYINT DEFAULT 0,
   `notice_html` TEXT,
   `subresellers` TEXT,
   PRIMARY KEY (`group_id`)
@@ -65,6 +67,52 @@ CREATE TABLE IF NOT EXISTS `credits_logs` (
   `reason` TEXT,
   PRIMARY KEY (`id`),
   KEY `idx_credits_logs_target` (`target_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `reseller_package_overrides` (
+  `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `user_id` INT UNSIGNED NOT NULL,
+  `package_id` INT UNSIGNED NOT NULL,
+  `trial_credits_override` DECIMAL(12,2) DEFAULT NULL,
+  `official_credits_override` DECIMAL(12,2) DEFAULT NULL,
+  `enabled` TINYINT(1) NOT NULL DEFAULT 1,
+  `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_reseller_package_override` (`user_id`, `package_id`),
+  KEY `idx_rpo_user` (`user_id`),
+  KEY `idx_rpo_package` (`package_id`),
+  CONSTRAINT `fk_rpo_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `reseller_expiry_media_services` (
+  `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `user_id` INT UNSIGNED NOT NULL,
+  `active` TINYINT(1) NOT NULL DEFAULT 1,
+  `warning_window_days` INT UNSIGNED NOT NULL DEFAULT 7,
+  `repeat_interval_hours` INT UNSIGNED NOT NULL DEFAULT 6,
+  `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_rems_user` (`user_id`),
+  KEY `idx_rems_user` (`user_id`),
+  CONSTRAINT `fk_rems_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `reseller_expiry_media_items` (
+  `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `service_id` INT UNSIGNED NOT NULL,
+  `scenario` ENUM('expiring','expired') NOT NULL,
+  `country_code` VARCHAR(5) NOT NULL DEFAULT '',
+  `media_type` ENUM('video','image') NOT NULL DEFAULT 'video',
+  `media_url` VARCHAR(2048) NOT NULL DEFAULT '',
+  `sort_order` INT UNSIGNED NOT NULL DEFAULT 0,
+  `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_remi_service` (`service_id`),
+  KEY `idx_remi_scenario` (`scenario`),
+  CONSTRAINT `fk_remi_service` FOREIGN KEY (`service_id`) REFERENCES `reseller_expiry_media_services` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ─── API keys ─────────────────────────────────────────────────────────
@@ -88,7 +136,9 @@ CREATE TABLE IF NOT EXISTS `lines` (
   `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
   `member_id` INT UNSIGNED DEFAULT NULL,
   `username` VARCHAR(255) NOT NULL,
-  `password` VARCHAR(255) NOT NULL,
+  `password` VARCHAR(255) NOT NULL DEFAULT '',
+  `password_hash` VARCHAR(255) DEFAULT NULL,
+  `password_enc` TEXT,
   `last_ip` VARCHAR(45) DEFAULT '',
   `exp_date` INT UNSIGNED DEFAULT NULL,
   `admin_enabled` TINYINT DEFAULT 1,
@@ -341,6 +391,7 @@ CREATE TABLE IF NOT EXISTS `episodes` (
   `info_json` TEXT,
   `movie_properties` TEXT,
   `movie_subtitles` TEXT,
+  `stream_server_id` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT '0 = inherit from series',
   `added` INT UNSIGNED DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `idx_episodes_series` (`series_id`),
@@ -544,6 +595,47 @@ CREATE TABLE IF NOT EXISTS `streaming_servers` (
   `health_net_mbps` DECIMAL(12,4) DEFAULT NULL,
   `health_ping_ms` DECIMAL(10,2) DEFAULT NULL,
   `agent_version` VARCHAR(64) DEFAULT NULL,
+  `runtime_enabled` TINYINT(1) NOT NULL DEFAULT 0 COMMENT 'Phase 1 XC Runtime: node can own stream runtime',
+  `proxy_enabled` TINYINT(1) NOT NULL DEFAULT 0 COMMENT 'Phase 1 XC Runtime: node can serve as proxy/edge',
+  `controller_enabled` TINYINT(1) NOT NULL DEFAULT 0 COMMENT 'Phase 1 XC Runtime: node can dispatch commands',
+  -- Edit Server parity fields
+  `base_url` VARCHAR(255) NOT NULL DEFAULT '' COMMENT 'Base URL for client URLs',
+  `server_ip` VARCHAR(45) NOT NULL DEFAULT '' COMMENT 'Dedicated server IP',
+  `dns_1` VARCHAR(45) NOT NULL DEFAULT '' COMMENT 'Primary DNS server',
+  `dns_2` VARCHAR(45) NOT NULL DEFAULT '' COMMENT 'Secondary DNS server',
+  `admin_password` VARCHAR(255) NOT NULL DEFAULT '' COMMENT 'Server admin password',
+  `full_duplex` TINYINT(1) NOT NULL DEFAULT 0,
+  `boost_fpm` TINYINT(1) NOT NULL DEFAULT 0,
+  -- Advanced tab
+  `http_port` INT UNSIGNED NOT NULL DEFAULT 8080,
+  `https_m3u_lines` TINYINT(1) NOT NULL DEFAULT 0,
+  `force_ssl_port` TINYINT(1) NOT NULL DEFAULT 0,
+  `https_port` INT UNSIGNED NOT NULL DEFAULT 8083,
+  `time_difference` VARCHAR(32) NOT NULL DEFAULT 'Auto',
+  `ssh_port` INT UNSIGNED NOT NULL DEFAULT 22,
+  `network_interface` VARCHAR(64) NOT NULL DEFAULT 'all',
+  `network_speed` VARCHAR(64) NOT NULL DEFAULT '',
+  `os_info` VARCHAR(128) NOT NULL DEFAULT '',
+  `geoip_load_balancing` TINYINT(1) NOT NULL DEFAULT 0,
+  `geoip_countries` TEXT NOT NULL DEFAULT '' COMMENT 'Comma-separated country codes',
+  `extra_nginx_config` TEXT NOT NULL DEFAULT '',
+  -- Server Guard tab
+  `server_guard_enabled` TINYINT(1) NOT NULL DEFAULT 0,
+  `ip_whitelisting` TINYINT(1) NOT NULL DEFAULT 0,
+  `botnet_fighter` TINYINT(1) NOT NULL DEFAULT 0,
+  `under_attack` TINYINT(1) NOT NULL DEFAULT 0,
+  `connection_limit_ports` VARCHAR(255) NOT NULL DEFAULT '' COMMENT 'Comma-separated ports',
+  `max_conn_per_ip` INT UNSIGNED NOT NULL DEFAULT 3,
+  `max_hits_normal_user` INT UNSIGNED NOT NULL DEFAULT 1,
+  `max_hits_restreamer` INT UNSIGNED NOT NULL DEFAULT 1,
+  `whitelist_username` TINYINT(1) NOT NULL DEFAULT 0,
+  `block_user_minutes` INT UNSIGNED NOT NULL DEFAULT 30,
+  `auto_restart_mysql` TINYINT(1) NOT NULL DEFAULT 0,
+  -- ISP Manager tab
+  `isp_enabled` TINYINT(1) NOT NULL DEFAULT 0,
+  `isp_priority` INT UNSIGNED NOT NULL DEFAULT 1,
+  `isp_allowed_names` TEXT NOT NULL DEFAULT '' COMMENT 'Comma-separated ISP names',
+  `isp_case_sensitive` ENUM('none','lower','upper') NOT NULL DEFAULT 'lower',
   `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
@@ -556,6 +648,9 @@ CREATE TABLE IF NOT EXISTS `streaming_server_domains` (
   `domain` VARCHAR(255) NOT NULL DEFAULT '',
   `is_primary` TINYINT(1) NOT NULL DEFAULT 0,
   `sort_order` INT NOT NULL DEFAULT 0,
+  `ssl_port` INT UNSIGNED NOT NULL DEFAULT 443,
+  `ssl_status` ENUM('active','expired','missing') NOT NULL DEFAULT 'missing',
+  `ssl_expiry` DATE DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `idx_ssd_server` (`server_id`),
   CONSTRAINT `fk_ssd_server` FOREIGN KEY (`server_id`) REFERENCES `streaming_servers` (`id`) ON DELETE CASCADE
@@ -574,5 +669,255 @@ CREATE TABLE IF NOT EXISTS `server_provisioning_jobs` (
   PRIMARY KEY (`id`),
   KEY `idx_spj_server` (`server_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ─── Backups ──────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS `backups` (
+  `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `filename` VARCHAR(255) NOT NULL,
+  `size_bytes` BIGINT UNSIGNED DEFAULT 0,
+  `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+  `type` ENUM('local','gdrive','dropbox','s3') DEFAULT 'local',
+  `cloud_url` TEXT,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- ─── Blocked ASNs ────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS `blocked_asns` (
+  `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `asn` VARCHAR(50) NOT NULL,
+  `org` VARCHAR(255) DEFAULT '',
+  `notes` TEXT,
+  `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_asn` (`asn`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- ─── Login Events (extended with VPN flag) ───────────────────────
+
+CREATE TABLE IF NOT EXISTS `login_events` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `user_id` INT UNSIGNED DEFAULT NULL,
+  `ip` VARCHAR(45) DEFAULT '',
+  `event_type` VARCHAR(50) DEFAULT '',
+  `is_vpn` TINYINT(1) DEFAULT 0,
+  `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_le_user` (`user_id`),
+  KEY `idx_le_vpn` (`is_vpn`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- ─── Roles & Permissions (RBAC) ─────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS `roles` (
+  `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `name` VARCHAR(100) NOT NULL,
+  `description` VARCHAR(255) DEFAULT '',
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS `permissions` (
+  `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `name` VARCHAR(100) NOT NULL,
+  `resource` VARCHAR(50) NOT NULL,
+  `action` VARCHAR(50) NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_perm` (`resource`, `action`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS `role_permissions` (
+  `role_id` INT UNSIGNED NOT NULL,
+  `permission_id` INT UNSIGNED NOT NULL,
+  PRIMARY KEY (`role_id`, `permission_id`),
+  CONSTRAINT `fk_rp_role` FOREIGN KEY (`role_id`) REFERENCES `roles` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_rp_perm` FOREIGN KEY (`permission_id`) REFERENCES `permissions` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- ─── Plex Servers ────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS `plex_servers` (
+  `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `name` VARCHAR(255) NOT NULL,
+  `url` VARCHAR(500) NOT NULL,
+  `plex_token` VARCHAR(100) DEFAULT '',
+  `last_seen` DATETIME DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- ─── Server relationships (LB / origin-proxy mapping) ─────────────
+
+CREATE TABLE IF NOT EXISTS `server_relationships` (
+  `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `parent_server_id` INT UNSIGNED NOT NULL COMMENT 'origin / upstream server',
+  `child_server_id` INT UNSIGNED NOT NULL COMMENT 'proxy / edge / child server',
+  `relationship_type` ENUM('origin-proxy','lb-member','failover') NOT NULL DEFAULT 'origin-proxy',
+  `priority` INT NOT NULL DEFAULT 0 COMMENT 'lower = higher priority',
+  `enabled` TINYINT(1) NOT NULL DEFAULT 1,
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_server_rel` (`parent_server_id`, `child_server_id`, `relationship_type`),
+  KEY `idx_srel_child` (`child_server_id`),
+  CONSTRAINT `fk_srel_parent` FOREIGN KEY (`parent_server_id`) REFERENCES `streaming_servers` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_srel_child` FOREIGN KEY (`child_server_id`) REFERENCES `streaming_servers` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ─── Stream server placement (per-stream per-server runtime state) ─
+-- Phase 1 XC Runtime: evolved with explicit runtime truth fields
+
+CREATE TABLE IF NOT EXISTS `stream_server_placement` (
+  `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `stream_type` ENUM('live','movie','episode') NOT NULL,
+  `stream_id` VARCHAR(64) NOT NULL COMMENT 'channel id, movie id, or episode id',
+  `server_id` INT UNSIGNED NOT NULL,
+  `status` ENUM('planned','starting','running','stopping','stopped','error','stale','orphaned') NOT NULL DEFAULT 'planned',
+  `pid` INT UNSIGNED DEFAULT NULL COMMENT 'FFmpeg PID on the server (if applicable)',
+  `bitrate_kbps` INT UNSIGNED DEFAULT NULL,
+  `clients` INT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'current viewer count on this server',
+  `error_text` TEXT,
+  `started_at` DATETIME DEFAULT NULL,
+  `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `parent_server_id` INT UNSIGNED NULL COMMENT 'upstream/origin server for relay placements',
+  `desired_state` ENUM('stopped','running') NOT NULL DEFAULT 'stopped',
+  `runtime_mode` ENUM('origin','relay','direct','archive') NOT NULL DEFAULT 'origin',
+  `on_demand` TINYINT(1) NOT NULL DEFAULT 0,
+  `monitor_pid` INT UNSIGNED NULL,
+  `delay_pid` INT UNSIGNED NULL,
+  `runtime_instance_id` VARCHAR(64) NULL,
+  `current_source` TEXT NULL,
+  `stream_info_json` JSON NULL,
+  `compatible` TINYINT(1) NOT NULL DEFAULT 0,
+  `video_codec` VARCHAR(64) NULL,
+  `audio_codec` VARCHAR(64) NULL,
+  `resolution` VARCHAR(64) NULL,
+  `ready_at` DATETIME NULL,
+  `last_runtime_report_at` DATETIME NULL,
+  `last_command_id` BIGINT UNSIGNED NULL,
+  `restart_count` INT UNSIGNED NOT NULL DEFAULT 0,
+  `error_code` VARCHAR(64) NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_placement` (`stream_type`, `stream_id`, `server_id`),
+  KEY `idx_placement_server` (`server_id`, `status`),
+  KEY `idx_placement_status` (`status`),
+  KEY `idx_placement_runtime_instance` (`runtime_instance_id`),
+  CONSTRAINT `fk_placement_server` FOREIGN KEY (`server_id`) REFERENCES `streaming_servers` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ─── Line runtime sessions (active viewer occupancy truth) ─────────────
+-- Phase 1 XC Runtime: canonical active session truth, equivalent to XC lines_live
+
+CREATE TABLE IF NOT EXISTS `line_runtime_sessions` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `line_id` INT UNSIGNED NOT NULL,
+  `stream_type` ENUM('live','movie','episode') NOT NULL,
+  `stream_id` VARCHAR(64) NOT NULL,
+  `placement_id` INT UNSIGNED NULL,
+  `origin_server_id` INT UNSIGNED NULL,
+  `proxy_server_id` INT UNSIGNED NULL,
+  `container` VARCHAR(20) NOT NULL DEFAULT '',
+  `session_uuid` VARCHAR(64) NOT NULL,
+  `playback_token` VARCHAR(255) NULL,
+  `user_ip` VARCHAR(45) NOT NULL DEFAULT '',
+  `user_agent` VARCHAR(512) NOT NULL DEFAULT '',
+  `date_start` INT UNSIGNED NULL,
+  `date_end` INT UNSIGNED NULL,
+  `last_seen_at` DATETIME NULL,
+  `geoip_country_code` VARCHAR(5) NOT NULL DEFAULT '',
+  `isp` VARCHAR(255) NOT NULL DEFAULT '',
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_session_uuid` (`session_uuid`),
+  KEY `idx_lrs_line` (`line_id`),
+  KEY `idx_lrs_server` (`origin_server_id`),
+  KEY `idx_lrs_placement` (`placement_id`),
+  KEY `idx_lrs_last_seen` (`last_seen_at`),
+  KEY `idx_lrs_date_start` (`date_start`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ─── Server commands (command queue truth) ─────────────────────────────
+-- Phase 1 XC Runtime: DB-backed command queue, delivered via heartbeat/agent transport
+
+CREATE TABLE IF NOT EXISTS `server_commands` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `server_id` INT UNSIGNED NOT NULL,
+  `stream_type` ENUM('live','movie','episode') NULL,
+  `stream_id` VARCHAR(64) NULL,
+  `placement_id` INT UNSIGNED NULL,
+  `command_type` ENUM('start_stream','stop_stream','restart_stream','probe_stream','reload_proxy_config','sync_server_config','reconcile_runtime','reconcile_sessions') NOT NULL,
+  `payload_json` JSON NULL,
+  `status` ENUM('queued','leased','running','succeeded','failed','expired','cancelled') NOT NULL DEFAULT 'queued',
+  `issued_by_user_id` INT UNSIGNED NULL,
+  `lease_token` VARCHAR(64) NULL,
+  `lease_expires_at` DATETIME NULL,
+  `attempt_count` INT UNSIGNED NOT NULL DEFAULT 0,
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `delivered_at` DATETIME NULL,
+  `finished_at` DATETIME NULL,
+  `result_json` JSON NULL,
+  `error_text` TEXT NULL,
+  PRIMARY KEY (`id`),
+  KEY `idx_sc_server` (`server_id`, `status`),
+  KEY `idx_sc_placement` (`placement_id`),
+  KEY `idx_sc_lease_expires` (`lease_expires_at`),
+  KEY `idx_sc_created` (`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ─── Server agent credentials (per-node auth foundation) ───────────────
+-- Phase 1 XC Runtime: explicit per-node credential storage, replaces meta_json secrets
+
+CREATE TABLE IF NOT EXISTS `server_agent_credentials` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `server_id` INT UNSIGNED NOT NULL,
+  `credential_id` VARCHAR(64) NOT NULL,
+  `secret_hash` VARCHAR(255) NOT NULL,
+  `status` ENUM('active','rotating','revoked') NOT NULL DEFAULT 'active',
+  `issued_at` DATETIME NOT NULL,
+  `rotated_at` DATETIME NULL,
+  `last_used_at` DATETIME NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_sac_server_cred` (`server_id`, `credential_id`),
+  UNIQUE KEY `uq_sac_credential_id` (`credential_id`),
+  KEY `idx_sac_status` (`status`),
+  CONSTRAINT `fk_sac_server` FOREIGN KEY (`server_id`) REFERENCES `streaming_servers` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Insert default roles
+INSERT IGNORE INTO `roles` (`id`, `name`, `description`) VALUES
+  (1, 'admin', 'Full administrator'),
+  (2, 'reseller', 'Reseller with limited access'),
+  (3, 'user', 'End user');
+
+-- Insert default permissions
+INSERT IGNORE INTO `permissions` (`id`, `name`, `resource`, `action`) VALUES
+  (1, 'streams.view', 'streams', 'view'),
+  (2, 'streams.edit', 'streams', 'edit'),
+  (3, 'streams.delete', 'streams', 'delete'),
+  (4, 'movies.view', 'movies', 'view'),
+  (5, 'movies.edit', 'movies', 'edit'),
+  (6, 'movies.delete', 'movies', 'delete'),
+  (7, 'series.view', 'series', 'view'),
+  (8, 'series.edit', 'series', 'edit'),
+  (9, 'series.delete', 'series', 'delete'),
+  (10, 'users.view', 'users', 'view'),
+  (11, 'users.edit', 'users', 'edit'),
+  (12, 'users.delete', 'users', 'delete'),
+  (13, 'lines.view', 'lines', 'view'),
+  (14, 'lines.edit', 'lines', 'edit'),
+  (15, 'lines.delete', 'lines', 'delete'),
+  (16, 'backups.view', 'backups', 'view'),
+  (17, 'backups.create', 'backups', 'create'),
+  (18, 'backups.restore', 'backups', 'restore'),
+  (19, 'settings.view', 'settings', 'view'),
+  (20, 'settings.edit', 'settings', 'edit'),
+  (21, 'security.view', 'security', 'view'),
+  (22, 'security.edit', 'security', 'edit'),
+  (23, 'server.view', 'server', 'view'),
+  (24, 'server.edit', 'server', 'edit');
+
+-- Admin gets all permissions
+INSERT IGNORE INTO `role_permissions` (`role_id`, `permission_id`)
+  SELECT 1, `id` FROM `permissions`;
 
 SET FOREIGN_KEY_CHECKS = 1;

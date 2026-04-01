@@ -40,6 +40,14 @@ async function handleGet(req, res) {
     key,
     baseUrl: defaultBase,
     resolveBaseUrl: (assetSid) => serverService.resolvePlaylistBaseUrl(line, fb, assetSid),
+    resolveAssetBaseUrl: async (assetType, assetId) => {
+      // Use the canonical selector — returns contract-compliant output with publicBaseUrl
+      const selected = await serverService.selectServer({ assetType, assetId, line });
+      // Use publicBaseUrl directly from selector; fallback to panel origin if not available
+      return selected && selected.publicBaseUrl
+        ? selected.publicBaseUrl
+        : await serverService.resolvePublicStreamOrigin(req, line);
+    },
   });
 
   sendPlaylist(res, m3u, key ? `playlist_${key}.m3u` : 'playlist.m3u');

@@ -6,8 +6,11 @@
 #   bash /path/to/NEW\ PANEL/scripts/auto_install_ubuntu.sh
 #
 # Optional env:
-#   INSTALL_ADMIN_USER=admin
+#   INSTALL_ADMIN_USER=custom_admin             (otherwise random)
 #   INSTALL_ADMIN_PASSWORD=yourSecurePassword   (otherwise random)
+#   DEFAULT_ADMIN_ACCESS_CODE=customcode        (otherwise random)
+#   DEFAULT_RESELLER_ACCESS_CODE=customcode     (otherwise random)
+#   PANEL_PUBLIC_HOST=panel.example.com         (otherwise detected IP)
 
 set -euo pipefail
 
@@ -19,6 +22,7 @@ SCHEMA_FILE="${PANEL_DIR}/scripts/schema.sql"
 ENV_EXAMPLE="${PANEL_DIR}/.env.example"
 
 die() { echo "ERROR: $*" >&2; exit 1; }
+random_alnum() { openssl rand -base64 48 | tr -dc 'A-Za-z0-9' | head -c "$1"; }
 
 [[ -f "$SCHEMA_FILE" ]] || die "Missing schema: $SCHEMA_FILE"
 [[ -f "${PANEL_DIR}/package.json" ]] || die "Invalid panel directory: $PANEL_DIR"
@@ -59,6 +63,15 @@ sudo systemctl start redis-server
 DB_NAME="${DB_NAME:-iptv_panel}"
 DB_USER="${DB_USER:-iptv}"
 DB_HOST="${DB_HOST:-localhost}"
+PORT="${PORT:-3000}"
+PRIMARY_IP="${PANEL_PUBLIC_IP:-$(hostname -I 2>/dev/null | awk '{print $1}') }"
+PRIMARY_IP="${PRIMARY_IP// /}"
+PANEL_PUBLIC_HOST="${PANEL_PUBLIC_HOST:-${PRIMARY_IP:-127.0.0.1}}"
+PANEL_BASE_URL="${PANEL_BASE_URL:-http://${PANEL_PUBLIC_HOST}:${PORT}}"
+INSTALL_ADMIN_USER="${INSTALL_ADMIN_USER:-admin_$(random_alnum 8 | tr 'A-Z' 'a-z')}"
+INSTALL_ADMIN_PASSWORD="${INSTALL_ADMIN_PASSWORD:-$(random_alnum 20)}"
+DEFAULT_ADMIN_ACCESS_CODE="${DEFAULT_ADMIN_ACCESS_CODE:-adm$(random_alnum 12 | tr 'A-Z' 'a-z')}"
+DEFAULT_RESELLER_ACCESS_CODE="${DEFAULT_RESELLER_ACCESS_CODE:-rsl$(random_alnum 12 | tr 'A-Z' 'a-z')}"
 
 ENV_FILE="${PANEL_DIR}/.env"
 if [[ -z "${DB_PASSWORD:-}" ]] && [[ -f "$ENV_FILE" ]] && grep -qE '^DB_PASSWORD=' "$ENV_FILE"; then
@@ -116,7 +129,7 @@ set_env_kv "REDIS_HOST" "127.0.0.1"
 set_env_kv "REDIS_PORT" "6379"
 set_env_kv "REDIS_PASSWORD" ""
 set_env_kv "SESSION_SECRET" "$SESSION_SECRET"
-set_env_kv "PORT" "${PORT:-3000}"
+set_env_kv "PORT" "$PORT"
 set_env_kv "STREAMING_MODE" "${STREAMING_MODE:-node}"
 
 chmod 600 "${PANEL_DIR}/.env" 2>/dev/null || true
@@ -132,7 +145,7 @@ CRED_FILE="${PANEL_DIR}/.install-credentials.txt"
 {
   echo "IPTV Panel — generated $(date -u +%Y-%m-%dT%H:%M:%SZ)"
   echo "Panel directory: $PANEL_DIR"
-  echo "Open: http://$(hostname -I 2>/dev/null | awk '{print $1}' || echo YOUR_IP):${PORT:-3000}"
+  echo "Open: ${PANEL_BASE_URL}"
   echo "MariaDB database: ${DB_NAME}  user: ${DB_USER}"
   echo "MariaDB password: ${DB_PASSWORD}"
   echo "Session secret stored in .env as SESSION_SECRET"
@@ -143,13 +156,44 @@ chmod 600 "$CRED_FILE"
 
 echo "==> Bootstrap DB (migrations + optional first admin)"
 export INSTALL_ADMIN_USER="${INSTALL_ADMIN_USER:-admin}"
+export INSTALL_ADMIN_PASSWORD
+export DEFAULT_ADMIN_ACCESS_CODE
+export DEFAULT_RESELLER_ACCESS_CODE
 export INSTALL_CREDENTIALS_FILE="$CRED_FILE"
-# Password only passed if user set INSTALL_ADMIN_PASSWORD in environment
+export PANEL_PUBLIC_HOST
+export PANEL_PUBLIC_IP="${PRIMARY_IP:-127.0.0.1}"
+export PANEL_BASE_URL
+export INSTALL_MAIN_SERVER_NAME="${INSTALL_MAIN_SERVER_NAME:-Primary Main Server}"
 node "${PANEL_DIR}/scripts/bootstrap-database.js"
+
+echo "==> Create systemd service"
+NODE_BIN="$(command -v node)"
+sudo tee /etc/systemd/system/novastreams-panel.service > /dev/null <<EOF
+[Unit]
+Description=NovaStreams Panel
+After=network.target mariadb.service redis-server.service
+Wants=mariadb.service redis-server.service
+
+[Service]
+Type=simple
+WorkingDirectory=${PANEL_DIR}
+Environment=NODE_ENV=production
+ExecStart=${NODE_BIN} ${PANEL_DIR}/server.js
+Restart=always
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+sudo systemctl daemon-reload
+sudo systemctl enable novastreams-panel
+sudo systemctl restart novastreams-panel
 
 echo ""
 echo "=========================================="
 echo " Install finished."
-echo " Panel:    cd \"$PANEL_DIR\" && npm start"
+echo " Panel URL: ${PANEL_BASE_URL}"
+echo " Service:  systemctl status novastreams-panel"
 echo " Credentials (copy): $CRED_FILE"
 echo "=========================================="

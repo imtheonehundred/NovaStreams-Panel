@@ -25,6 +25,7 @@
       <nav class="sidebar-nav">
         <a href="#" class="nav-link active" data-page="dashboard"><span class="nav-icon">&#9632;</span> Dashboard</a>
         <a href="#" class="nav-link" data-page="lines"><span class="nav-icon">&#9679;</span> Lines</a>
+        <a href="#" class="nav-link" data-page="expiry-media" id="expiryMediaNav" style="display:none"><span class="nav-icon">&#9654;</span> Expiry Media</a>
         <a href="#" class="nav-link" data-page="profile"><span class="nav-icon">&#128100;</span> Profile</a>
       </nav>
       <div class="sidebar-footer">
@@ -46,6 +47,9 @@
         <section class="page page-dashboard" id="page-dashboard">
           <div class="dash-header">
             <h2 class="dash-title" id="dashWelcome">Dashboard</h2>
+          </div>
+          <div class="card" id="dashAnnouncement" style="display:none;margin-bottom:16px">
+            <div class="card-body" id="dashAnnouncementBody"></div>
           </div>
           <div class="dash-stats-row" id="dashStats"></div>
         </section>
@@ -108,6 +112,28 @@
                 <thead><tr><th>Amount</th><th>Reason</th><th>Date</th></tr></thead>
                 <tbody></tbody>
               </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- EXPIRY MEDIA -->
+        <section class="page" id="page-expiry-media" style="display:none">
+          <div class="page-header">
+            <h2>Expiry Media</h2>
+            <div class="page-actions">
+              <button class="btn btn-primary" onclick="RSL.saveExpiryMedia()">Save Changes</button>
+            </div>
+          </div>
+          <div class="card" id="expiryMediaDenied" style="display:none;margin-bottom:16px">
+            <div class="card-body" style="color:#f85149">Your member group does not allow self-service expiry media management.</div>
+          </div>
+          <div class="card" id="expiryMediaEditorCard">
+            <div class="card-body">
+              <div class="form-row"><label>Service Active</label><div class="form-input"><label class="toggle"><input type="checkbox" id="rslExpiryActive"><span class="toggle-slider"></span></label></div></div>
+              <div class="form-row"><label>Expiring Soon Window (days)</label><div class="form-input"><input type="number" id="rslExpiryWindowDays" class="form-control" min="1" value="7"></div></div>
+              <div class="form-row"><label>Repeat Interval (hours)</label><div class="form-input"><input type="number" id="rslExpiryRepeatHours" class="form-control" min="1" value="6"></div></div>
+              <div class="form-row"><label>Expiring Soon Media</label><div class="form-input"><div id="rslExpiryExpiringRows"></div><button class="btn btn-xs btn-secondary mt-1" onclick="RSL.addExpiryRow('expiring')">+ Add Row</button></div></div>
+              <div class="form-row"><label>Expired Media</label><div class="form-input"><div id="rslExpiryExpiredRows"></div><button class="btn btn-xs btn-secondary mt-1" onclick="RSL.addExpiryRow('expired')">+ Add Row</button></div></div>
             </div>
           </div>
         </section>

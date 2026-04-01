@@ -8,10 +8,12 @@ const os = require('os');
 const { v4: uuidv4 } = require('uuid');
 const { spawn } = require('child_process');
 const fs = require('fs');
-const crypto = require('crypto');
 const { PassThrough } = require('stream');
 const multer = require('multer');
 const treeKill = require('tree-kill');
+const { csrfProtection } = require('./middleware/csrf');
+const { securityHeaders } = require('./middleware/securityHeaders');
+const { streamLimiter, authLimiter, adminLimiter } = require('./middleware/rateLimiter');
 
 const {
   buildFfmpegArgs,
@@ -38,38 +40,41 @@ const {
   waitForPrebuffer,
 } = require('./lib/ts-prebuffer');
 const onDemandLive = require('./lib/on-demand-live');
+const { AUTH_BRUTE_FORCE_PATHS, buildSessionCookieOptions } = require('./lib/panel-session');
 const fetch = require('node-fetch');
 const dbService = require('./services/dbService');
 const bouquetService = require('./services/bouquetService');
 const serverService = require('./services/serverService');
-const { log: serverLog } = require('./services/logger');
+const { info: serverLog } = require('./services/logger');
 const { eventBus, WS_EVENTS } = require('./services/eventBus');
 const { createWsServer } = require('./services/wsServer');
-const { restartChannel } = require('./services/streamManager');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const SESSION_SECRET = String(process.env.SESSION_SECRET || '').trim();
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 let MAX_FFMPEG_PROCESSES = parseInt(process.env.MAX_FFMPEG_PROCESSES, 10) || 0;
 /** `node` (default): FFmpeg stdout pipe for MPEG-TS / local streams dir for HLS. `nginx`: HLS on disk under IPTV_DISK_ROOT; MPEG-TS via FFmpeg pipe + Node (no live/*.ts file). */
 const STREAMING_MODE = (process.env.STREAMING_MODE || 'node').toLowerCase();
 const IPTV_DISK_ROOT = process.env.IPTV_DISK_ROOT || path.join(__dirname, 'iptv-media');
 app.set('trust proxy', 1);
+if (!SESSION_SECRET) {
+  if (IS_PRODUCTION) {
+    throw new Error('SESSION_SECRET is required in production');
+  }
+  console.warn('[Security] SESSION_SECRET missing; using development fallback secret');
+}
 app.use(
   cors({
     origin: true,
     credentials: true,
   })
 );
-app.use(
-  cookieSession({
-    name: 'session',
-    keys: [process.env.SESSION_SECRET],
-    maxAge: 7 * 24 * 3600 * 1000,
-    sameSite: 'lax',
-    httpOnly: true,
-  })
-);
+securityHeaders(app);
+app.use(cookieSession(buildSessionCookieOptions({ sessionSecret: SESSION_SECRET, isProduction: IS_PRODUCTION })));
 app.use(express.json({ limit: '10mb' }));
+app.use(AUTH_BRUTE_FORCE_PATHS, authLimiter);
+app.use('/api', adminLimiter);
 
 const playlistRoutes = require('./routes/playlist');
 app.get('/get.php', playlistRoutes.handleGet);
@@ -91,31 +96,203 @@ const RESERVED_GATEWAY_SEGMENTS = new Set([
   'api', 'streams', 'live', 'drm', 'get.php', 'css', 'js', 'assets', 'watermarks', 'logs', 'favicon.ico',
 ]);
 
-async function serveAccessCodeGateway(req, res, next) {
-  const raw = String((req.params && req.params.accessCode) || '').replace(/\/+$/, '').trim();
-  const code = raw;
-  if (!code || RESERVED_GATEWAY_SEGMENTS.has(code)) return next();
-  if (!/^[A-Za-z0-9_-]{3,128}$/.test(code)) return res.status(404).end();
-  try {
-    const row = await dbApi.getAccessCodeByCode(code);
-    const enabled = row && (row.enabled === true || row.enabled === 1 || Number(row.enabled) === 1);
-    if (!row || !enabled) return res.status(403).type('text/plain').send('Invalid access code.');
-    if (req.session && req.session.accessCodeId && req.session.accessCodeId !== row.id) {
-      req.session.userId = null;
-    }
-    req.session.portalRole = row.role;
-    req.session.accessCode = row.code;
-    req.session.accessCodeId = row.id;
-    if (row.role === 'reseller') {
-      return res.sendFile(path.join(__dirname, 'public', 'reseller.html'));
-    }
-    return res.sendFile(path.join(__dirname, 'public', 'index.html'));
-  } catch (e) {
-    return res.status(500).type('text/plain').send(e.message || 'gateway error');
+const ADMIN_PORTAL_PAGE_SEGMENTS = new Set([
+  'dashboard',
+  'lines',
+  'manage-users',
+  'add-user',
+  'line-form',
+  'line-stats',
+  'movies',
+  'movie-import',
+  'series',
+  'series-form',
+  'series-import',
+  'episodes',
+  'streams',
+  'stream-import',
+  'drm-streams',
+  'add-channels',
+  'manage-channels',
+  'monitor-top-channels',
+  'stream-import-tools',
+  'providers',
+  'import-users',
+  'import-content',
+  'categories',
+  'categories-channels',
+  'categories-movies',
+  'categories-series',
+  'bouquets',
+  'packages',
+  'transcode-profiles',
+  'resellers',
+  'registered-users',
+  'add-registered-user',
+  'registered-user-form',
+  'member-groups',
+  'member-group-form',
+  'expiry-media',
+  'expiry-media-edit',
+  'users',
+  'epg',
+  'servers',
+  'server-edit',
+  'install-lb',
+  'install-proxy',
+  'manage-proxy',
+  'server-order',
+  'server-monitor',
+  'bandwidth-monitor',
+  'live-connections',
+  'live-connections-map',
+  'settings',
+  'security',
+  'monitor',
+  'sharing',
+  'backups',
+  'plex',
+  'logs',
+  'access-codes',
+  'db-manager',
+]);
+
+const RESELLER_PORTAL_PAGE_SEGMENTS = new Set([
+  'dashboard',
+  'lines',
+  'profile',
+  'line-form',
+]);
+
+function sendPortalShell(res, role) {
+  if (role === 'reseller') {
+    return res.sendFile(path.join(__dirname, 'public', 'reseller.html'));
+  }
+  return res.sendFile(path.join(__dirname, 'public', 'index.html'));
+}
+
+function syncAccessCodeSession(req, row) {
+  if (req.session && ((req.session.accessCodeId && req.session.accessCodeId !== row.id) || (req.session.portalRole && req.session.portalRole !== row.role))) {
+    req.session.userId = null;
+  }
+  req.session.portalRole = row.role;
+  req.session.accessCode = row.code;
+  req.session.accessCodeId = row.id;
+}
+
+function clearPanelUserSession(req, { preserveGateway = true } = {}) {
+  if (!req.session) return;
+  req.session.userId = null;
+  if (!preserveGateway) {
+    req.session.portalRole = null;
+    req.session.accessCode = null;
+    req.session.accessCodeId = null;
   }
 }
 
+async function validatePanelAccessCodeSession(req, expectedRole = null) {
+  const session = req.session || null;
+  if (!session || !session.accessCodeId || !session.portalRole) {
+    clearPanelUserSession(req, { preserveGateway: false });
+    return null;
+  }
+  const row = await dbApi.getAccessCodeById(session.accessCodeId);
+  const enabled = row && (row.enabled === true || row.enabled === 1 || Number(row.enabled) === 1);
+  if (!row || !enabled || row.role !== session.portalRole || (expectedRole && row.role !== expectedRole)) {
+    clearPanelUserSession(req, { preserveGateway: false });
+    return null;
+  }
+  if (session.accessCode !== row.code) session.accessCode = row.code;
+  return row;
+}
+
+async function resolveAccessCodeGatewayRow(req, res, next) {
+  const raw = String((req.params && req.params.accessCode) || '').replace(/\/+$/, '').trim();
+  const code = raw;
+  if (!code || RESERVED_GATEWAY_SEGMENTS.has(code)) {
+    if (typeof next === 'function') next();
+    return null;
+  }
+  if (!/^[A-Za-z0-9_-]{3,128}$/.test(code)) {
+    res.status(404).end();
+    return null;
+  }
+  try {
+    const row = await dbApi.getAccessCodeByCode(code);
+    const enabled = row && (row.enabled === true || row.enabled === 1 || Number(row.enabled) === 1);
+    if (!row || !enabled) {
+      res.status(403).type('text/plain').send('Invalid access code.');
+      return null;
+    }
+    syncAccessCodeSession(req, row);
+    return row;
+  } catch (e) {
+    res.status(500).type('text/plain').send(e.message || 'gateway error');
+    return null;
+  }
+}
+
+async function serveAccessCodeGateway(req, res, next) {
+  const row = await resolveAccessCodeGatewayRow(req, res, next);
+  if (!row) return;
+  return sendPortalShell(res, row.role);
+}
+
+async function serveAccessCodePortalSubpage(req, res, next) {
+  const page = String((req.params && req.params.page) || '').replace(/\/+$/, '').trim();
+  const mayBePortalPage = ADMIN_PORTAL_PAGE_SEGMENTS.has(page) || RESELLER_PORTAL_PAGE_SEGMENTS.has(page);
+  if (!mayBePortalPage) return next();
+
+  const row = await resolveAccessCodeGatewayRow(req, res, next);
+  if (!row) return;
+
+  if (row.role === 'reseller') {
+    if (!RESELLER_PORTAL_PAGE_SEGMENTS.has(page)) return next();
+    return sendPortalShell(res, row.role);
+  }
+
+  if (!ADMIN_PORTAL_PAGE_SEGMENTS.has(page)) return next();
+  return sendPortalShell(res, row.role);
+}
+
+async function resolveAdminAlias(req, res) {
+  const row = await dbApi.getAccessCodeByCode('admin');
+  const enabled = row && (row.enabled === true || row.enabled === 1 || Number(row.enabled) === 1);
+  if (row && enabled && row.role === 'admin') {
+    syncAccessCodeSession(req, row);
+    return row;
+  }
+  const allCodes = await dbApi.listAccessCodes();
+  const fallback = allCodes.find((c) => {
+    const ok = c && (c.enabled === true || c.enabled === 1 || Number(c.enabled) === 1);
+    return ok && c.role === 'admin';
+  });
+  if (fallback) {
+    syncAccessCodeSession(req, fallback);
+    return fallback;
+  }
+  res.status(403).type('text/plain').send('Admin access code required. Create one in Access Codes settings.');
+  return null;
+}
+
+async function serveAdminAliasGateway(req, res, next) {
+  const row = await resolveAdminAlias(req, res);
+  if (!row) return;
+  return sendPortalShell(res, row.role);
+}
+
+async function serveAdminAliasSubpage(req, res, next) {
+  const page = String((req.params && req.params.page) || '').replace(/\/+$/, '').trim();
+  if (!ADMIN_PORTAL_PAGE_SEGMENTS.has(page)) return next();
+  const row = await resolveAdminAlias(req, res);
+  if (!row) return;
+  return sendPortalShell(res, row.role);
+}
+
 // Must run before express.static so paths like /admin are never treated as static files
+app.get('/admin/:page', serveAdminAliasSubpage);
+app.get('/admin', serveAdminAliasGateway);
+app.get('/:accessCode/:page', serveAccessCodePortalSubpage);
 app.get('/:accessCode', serveAccessCodeGateway);
 
 app.use(express.static(path.join(__dirname, 'public')));
@@ -654,15 +831,23 @@ function requireAuth(req, res, next) {
   if (!uid) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
-  req.userId = uid;
-  userActivity.set(uid, Date.now());
-  next();
+  validatePanelAccessCodeSession(req)
+    .then((accessCode) => {
+      if (!accessCode) {
+        return res.status(403).json({ error: 'Access code invalid' });
+      }
+      req.userId = uid;
+      userActivity.set(uid, Date.now());
+      next();
+    })
+    .catch((e) => res.status(500).json({ error: e.message || 'auth failed' }));
 }
 
 async function requireAdminAuth(req, res, next) {
   const uid = req.session && req.session.userId;
   if (!uid) return res.status(401).json({ error: 'Unauthorized' });
-  if (req.session.portalRole && req.session.portalRole !== 'admin') return res.status(403).json({ error: 'Forbidden' });
+  const accessCode = await validatePanelAccessCodeSession(req, 'admin');
+  if (!accessCode) return res.status(403).json({ error: 'Access code invalid' });
   const isAdmin = await dbApi.isAdmin(uid);
   if (!isAdmin) return res.status(403).json({ error: 'Forbidden' });
   req.userId = uid;
@@ -697,6 +882,7 @@ async function loadChannelsFromDb() {
     const ch = JSON.parse(row.json_data);
     delete ch.tsDelivery;
     ch.userId = row.user_id;
+    ch.id = row.id;
     ch.status = 'stopped';
     ch.hlsUrl = null;
     ch.error = null;
@@ -956,6 +1142,19 @@ async function mergeChannelOptions(existing, body) {
   const notes = body.notes !== undefined ? String(body.notes || '')
     : existing && existing.notes ? existing.notes : '';
 
+  const join_sub_category_ids = (() => {
+    const raw = body.join_sub_category_ids !== undefined
+      ? body.join_sub_category_ids
+      : existing && existing.join_sub_category_ids !== undefined
+        ? existing.join_sub_category_ids
+        : existing && existing.joinSubCategoryIds !== undefined
+          ? existing.joinSubCategoryIds
+          : [];
+    return Array.isArray(raw)
+      ? raw.map((value) => parseInt(value, 10)).filter((value) => Number.isFinite(value) && value > 0)
+      : [];
+  })();
+
   const on_demand = body.on_demand !== undefined ? !!body.on_demand
     : existing && existing.on_demand !== undefined ? !!existing.on_demand : false;
 
@@ -992,8 +1191,84 @@ async function mergeChannelOptions(existing, body) {
   const epg_offset = body.epg_offset !== undefined ? parseInt(body.epg_offset, 10) || 0
     : existing && existing.epg_offset !== undefined ? existing.epg_offset : 0;
 
+  const epg_source_id = body.epg_source_id !== undefined
+    ? Math.max(0, parseInt(body.epg_source_id, 10) || 0)
+    : existing && existing.epg_source_id !== undefined
+      ? Math.max(0, parseInt(existing.epg_source_id, 10) || 0)
+      : 0;
+
+  const epg_language = body.epg_language !== undefined
+    ? String(body.epg_language || '').trim().toLowerCase()
+    : existing && existing.epg_language
+      ? String(existing.epg_language || '').trim().toLowerCase()
+      : '';
+
   const category_id = body.category_id !== undefined ? (body.category_id || null)
     : existing && existing.category_id !== undefined ? existing.category_id : null;
+
+  const direct_source = body.direct_source !== undefined
+    ? !!body.direct_source
+    : existing && existing.direct_source !== undefined
+      ? !!existing.direct_source
+      : false;
+
+  const protect_stream = body.protect_stream !== undefined
+    ? !!body.protect_stream
+    : existing && existing.protect_stream !== undefined
+      ? !!existing.protect_stream
+      : false;
+
+  const custom_map_query = body.custom_map_query !== undefined
+    ? String(body.custom_map_query || '').trim()
+    : existing && existing.custom_map_query
+      ? String(existing.custom_map_query || '').trim()
+      : '';
+
+  const custom_map_entries = (() => {
+    const raw = body.custom_map_entries !== undefined
+      ? body.custom_map_entries
+      : existing && existing.custom_map_entries !== undefined
+        ? existing.custom_map_entries
+        : [];
+    return Array.isArray(raw)
+      ? raw
+        .map((entry) => {
+          if (entry && typeof entry === 'object') {
+            return {
+              type: String(entry.type || 'Manual').trim() || 'Manual',
+              info: String(entry.info || '').trim(),
+            };
+          }
+          const info = String(entry || '').trim();
+          return info ? { type: 'Manual', info } : null;
+        })
+        .filter((entry) => entry && entry.info)
+      : [];
+  })();
+
+  const restart_days = body.restart_days !== undefined
+    ? String(body.restart_days || '').trim()
+    : existing && existing.restart_days
+      ? String(existing.restart_days || '').trim()
+      : '';
+
+  const restart_time = body.restart_time !== undefined
+    ? String(body.restart_time || '').trim()
+    : existing && existing.restart_time
+      ? String(existing.restart_time || '').trim()
+      : '';
+
+  const timeshift_server_id = body.timeshift_server_id !== undefined
+    ? Math.max(0, parseInt(body.timeshift_server_id, 10) || 0)
+    : existing && existing.timeshift_server_id !== undefined
+      ? Math.max(0, parseInt(existing.timeshift_server_id, 10) || 0)
+      : 0;
+
+  const timeshift_days = body.timeshift_days !== undefined
+    ? Math.max(0, parseInt(body.timeshift_days, 10) || 0)
+    : existing && existing.timeshift_days !== undefined
+      ? Math.max(0, parseInt(existing.timeshift_days, 10) || 0)
+      : 0;
 
   const veIn =
     body.videoEncoder !== undefined ? String(body.videoEncoder || '').toLowerCase() : existing && existing.videoEncoder;
@@ -1117,13 +1392,24 @@ async function mergeChannelOptions(existing, body) {
     probesize_ondemand,
     delay_minutes,
     notes,
+    join_sub_category_ids,
     on_demand,
     preWarm,
     prebuffer_size_mb,
     ingest_style_override: ingest_style_override || null,
     restart_on_edit,
     epg_offset,
+    epg_source_id,
+    epg_language,
     category_id,
+    direct_source,
+    protect_stream,
+    custom_map_query,
+    custom_map_entries,
+    restart_days,
+    restart_time,
+    timeshift_server_id,
+    timeshift_days,
     transcode_profile_id,
     stream_server_id,
   };
@@ -1339,7 +1625,7 @@ async function createImportedChannel(bodyIn, userId) {
     finalStabilityScore: 100,
     userId,
   };
-
+  channel.id = id;
   channels.set(id, channel);
   await dbApi.insertChannel(id, userId, channel);
 
@@ -1358,60 +1644,105 @@ importChannelBridge.setChannelImportHandler(createImportedChannel);
 // API Routes
 // ========================
 
-/** Remote node agent: HMAC-SHA256(AGENT_SECRET, JSON.stringify(req.body)) in header `X-Agent-Signature` (hex). */
-const _agentRate = new Map();
-function agentHeartbeatRateOk(ip) {
-  const now = Date.now();
-  const windowMs = 60000;
-  const max = 60;
-  let arr = _agentRate.get(ip) || [];
-  arr = arr.filter((t) => now - t < windowMs);
-  if (arr.length >= max) return false;
-  arr.push(now);
-  _agentRate.set(ip, arr);
-  return true;
+const agentRoutes = require('./routes/agent')({ dbApi, serverService });
+app.use('/api', agentRoutes);
+
+/**
+ * Extract the best stream URL from a movie row.
+ * Mirrors the logic in routes/stream.js:getSourceUrls().
+ */
+function getSourceUrlFromRow(row) {
+  if (row.stream_source) {
+    try {
+      const parsed = JSON.parse(row.stream_source);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        const first = String(parsed[0] || '').trim();
+        if (first) return first;
+      }
+    } catch {}
+  }
+  return String(row.stream_url || '').trim();
 }
 
-app.post('/api/agent/heartbeat', async (req, res) => {
-  const secret = String(process.env.AGENT_SECRET || '').trim();
-  if (!secret) return res.status(503).json({ error: 'agent disabled' });
-  const sig = String(req.get('x-agent-signature') || '');
-  const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
-  const payload = JSON.stringify({
-    server_id: body.server_id,
-    ts: body.ts,
-    cpu: body.cpu,
-    mem: body.mem,
-    net_mbps: body.net_mbps,
-    ping_ms: body.ping_ms,
-    version: body.version,
-  });
-  const expect = crypto.createHmac('sha256', secret).update(payload).digest('hex');
-  let sigOk = false;
-  try {
-    const a = Buffer.from(expect, 'hex');
-    const b = Buffer.from(sig, 'hex');
-    if (a.length === b.length && a.length > 0) sigOk = crypto.timingSafeEqual(a, b);
-  } catch (_) {}
-  if (!sigOk) return res.status(401).json({ error: 'invalid signature' });
-  const ip = req.ip || req.connection?.remoteAddress || '';
-  if (!agentHeartbeatRateOk(String(ip))) return res.status(429).json({ error: 'rate limit' });
-  const serverId = parseInt(body.server_id, 10);
-  if (!Number.isFinite(serverId) || serverId <= 0) return res.status(400).json({ error: 'server_id required' });
-  const row = await serverService.getServer(serverId);
-  if (!row) return res.status(404).json({ error: 'unknown server' });
-  try {
-    await serverService.applyHeartbeat(serverId, {
-      cpu: body.cpu,
-      mem: body.mem,
-      net_mbps: body.net_mbps,
-      ping_ms: body.ping_ms,
-      version: body.version,
-    });
-    res.json({ ok: true });
-  } catch (e) {
-    res.status(500).json({ error: e.message || 'failed' });
+/**
+ * Extract the best stream URL from an episode row.
+ */
+function getSourceUrlFromEpisodeRow(ep) {
+  if (ep.stream_source) {
+    try {
+      const parsed = JSON.parse(ep.stream_source);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        const first = String(parsed[0] || '').trim();
+        if (first) return first;
+      }
+    } catch {}
   }
+  return String(ep.stream_url || '').trim();
+}
+
+/**
+ * Phase 5 — Node streaming validation endpoint.
+ *
+ * The node's agent calls this when it receives a movie/episode streaming request
+ * from a redirected client. It validates the HMAC signature and the embedded token,
+ * then returns the source URL and container type so the agent can stream the content.
+ *
+ * This keeps all auth logic on the panel while allowing the node to act as
+ * the byte-serving origin for movies and episodes.
+ *
+ * Query params:
+ *   token  — AES-encoded stream token from buildNodeStreamRedirectUrl
+ *   expires — token expiry timestamp (ms)
+ *   sig    — HMAC signature of token+expires
+ *   asset  — 'movie' or 'episode'
+ *   id     — movie id or episode id
+ *
+ * Response:
+ *   { ok: true, streamId, container, sourceUrl, lineId }
+ *   { ok: false, error: string }
+ */
+app.get('/api/stream/node-validate', async (req, res) => {
+  const { token, expires, sig, asset, id } = req.query;
+  if (!token || !expires || !sig || !asset || !id) {
+    return res.status(400).json({ ok: false, error: 'missing parameters' });
+  }
+  if (asset === 'live') {
+    return res.status(410).json({ ok: false, error: 'live node validation is de-scoped in TARGET' });
+  }
+  const channelId = `${asset}:${id}`;
+  const verdict = await securityService.validateStreamAccess({
+    token: String(token),
+    expires: String(expires),
+    sig: String(sig),
+    ip: req.ip,
+    channelId,
+  });
+  if (!verdict.ok) {
+    return res.status(401).json({ ok: false, error: verdict.error || 'unauthorized' });
+  }
+  // Get source URL for the asset
+  let sourceUrl = '';
+  let container = 'mp4';
+  let lineId = verdict.session ? verdict.session.user.id : (verdict.lineUserId || null);
+  if (asset === 'movie') {
+    const movieId = parseInt(id, 10);
+    const row = await dbApi.getMovieById(movieId);
+    if (row) {
+      sourceUrl = getSourceUrlFromRow(row);
+      container = row.container_extension || 'mp4';
+    }
+  } else if (asset === 'episode') {
+    const episodeId = parseInt(id, 10);
+    const ep = await dbApi.getEpisodeById(episodeId);
+    if (ep) {
+      sourceUrl = getSourceUrlFromEpisodeRow(ep);
+      container = ep.container_extension || 'mp4';
+    }
+  }
+  if (!sourceUrl) {
+    return res.status(404).json({ ok: false, error: 'source not found' });
+  }
+  res.json({ ok: true, streamId: String(id), container, sourceUrl, lineId });
 });
 
 // API-key validation endpoint for browser extensions
@@ -1430,6 +1761,9 @@ const playbackRoutes = require("./routes/playback");
 const xtreamRoutes = require("./routes/xtream");
 const adminRoutes = require("./routes/admin");
 const resellerRoutes = require("./routes/reseller");
+const channelRoutes = require('./routes/channels');
+const transcodeRoutes = require('./routes/transcode');
+const drmRoutes = require('./routes/drm');
 
 app.use("/api/auth", authRoutes(dbApi, requireAuth));
 app.use("/api/playback", playbackRoutes);
@@ -1437,6 +1771,7 @@ app.use("/api/xtream", xtreamRoutes);
 app.use(xtreamRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/reseller", resellerRoutes);
+app.use("/api/client", require('./routes/client'));
 
 app.get('/api/system/db-status', requireAdminAuth, async (_req, res) => {
   try { res.json(await dbService.getDatabaseStatus()); }
@@ -1453,12 +1788,12 @@ app.get('/api/system/db-live', requireAdminAuth, async (_req, res) => {
   catch (e) { res.status(500).json({ error: e.message || 'failed' }); }
 });
 
-app.post('/api/system/db-optimize', requireAdminAuth, async (_req, res) => {
+app.post('/api/system/db-optimize', requireAdminAuth, csrfProtection, async (_req, res) => {
   try { res.json(await dbService.optimizeDatabase({ source: 'api' })); }
   catch (e) { res.status(400).json({ error: e.message || 'optimize failed' }); }
 });
 
-app.post('/api/system/db-repair', requireAdminAuth, async (_req, res) => {
+app.post('/api/system/db-repair', requireAdminAuth, csrfProtection, async (_req, res) => {
   try { res.json(await dbService.repairDatabase({ source: 'api' })); }
   catch (e) { res.status(400).json({ error: e.message || 'repair failed' }); }
 });
@@ -1481,19 +1816,43 @@ app.post('/api/extension/import', requireApiKey, async (req, res) => {
 });
 
 /** Import channel from raw extraction text directly in panel (session auth). */
-app.post('/api/channels/import', requireAuth, async (req, res) => {
-  let body = { ...(req.body || {}) };
-  if (body.rawText) {
-    const parsed = parseExtractionDump(body.rawText);
-    body = { ...parsed, ...body };
-  }
-  try {
-    const created = await createImportedChannel(body, req.userId);
-    res.json({ id: created.id, ...created.channel });
-  } catch (e) {
-    res.status(e.statusCode || 500).json({ error: e.message || 'Import failed' });
-  }
-});
+app.use('/api', channelRoutes({
+  requireAuth,
+  createImportedChannel,
+  parseExtractionDump,
+  channels,
+  processes,
+  tsBroadcasts,
+  bouquetService,
+  dbApi,
+  isMovieChannel,
+  isInternalChannel,
+  serverService,
+  STREAMING_MODE,
+  hlsIdle,
+  securityService,
+  ALLOW_ADMIN_PREVIEW_UNSIGNED_TS,
+  ALLOW_LOCAL_UNSIGNED_TS,
+  restartWithSeamlessIfPossible,
+  applyStabilityFix,
+  persistChannel,
+  qoeRate,
+  clamp,
+  computeQoeScore,
+  computeFinalScore,
+  startChannel,
+  stopChannel,
+  mergeChannelOptions,
+  normalizeSourceQueue,
+  resolveEffectiveInputType,
+  normalizeHex32,
+  WATERMARKS_DIR,
+  mpegtsMultiConflict,
+  rootDir: __dirname,
+  path,
+  fs,
+  uuidv4,
+}));
 
 app.get('/api/watermarks', requireAuth, (req, res) => {
   try {
@@ -1506,7 +1865,7 @@ app.get('/api/watermarks', requireAuth, (req, res) => {
   }
 });
 
-app.post('/api/watermarks', requireAuth, (req, res) => {
+app.post('/api/watermarks', requireAuth, csrfProtection, (req, res) => {
   upload.single('file')(req, res, (err) => {
     if (err) {
       return res.status(400).json({ error: err.message || 'Upload failed' });
@@ -1518,157 +1877,6 @@ app.post('/api/watermarks', requireAuth, (req, res) => {
   });
 });
 
-// Get all channels
-app.get('/api/channels', requireAuth, async (req, res) => {
-  const list = [];
-  channels.forEach((ch, id) => {
-    if (ch.userId !== req.userId) return;
-    if (isMovieChannel(ch)) return;
-    if (isInternalChannel(ch)) return;
-    const { userId, ...rest } = ch;
-    const broadcast = tsBroadcasts.get(id);
-    const clients = broadcast ? broadcast.consumers.size : 0;
-    const si = rest.streamInfo ? { ...rest.streamInfo } : {};
-    delete si._vDone; delete si._aDone; delete si._fpsDone;
-    list.push({ id, ...rest, streamInfo: si, clients, pid: processes.has(id) ? processes.get(id).pid : null });
-  });
-  list.sort((a, b) => {
-    const d = (a.sortOrder || 0) - (b.sortOrder || 0);
-    return d !== 0 ? d : String(a.name || '').localeCompare(String(b.name || ''));
-  });
-  try {
-    const bmap = await bouquetService.getBouquetIdsMapForChannels(list.map((x) => x.id));
-    for (const item of list) {
-      item.bouquet_ids = bmap.get(String(item.id)) || [];
-    }
-  } catch (e) {
-    for (const item of list) item.bouquet_ids = [];
-  }
-  res.json(list);
-});
-
-/** Signed playback URL for panel preview (required for MPEG-TS; HLS segments may be served without token). */
-app.get('/api/channels/:id/playback-url', requireAuth, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const ch = channels.get(id);
-    if (!ch || ch.userId !== req.userId) {
-      return res.status(404).json({ error: 'Channel not found' });
-    }
-    if (isMovieChannel(ch) || isInternalChannel(ch)) {
-      return res.status(400).json({ error: 'Playback URL not available for this channel type' });
-    }
-    const publicBase = await serverService.resolvePublicStreamOrigin(req, null);
-    const ttlSec = Math.min(60, Math.max(30, parseInt(process.env.PLAYBACK_TOKEN_TTL_SEC || '45', 10) || 45));
-    const expiresMs = Date.now() + ttlSec * 1000;
-
-    if (STREAMING_MODE === 'nginx' && ch.nginxStreaming) {
-      if (ch.on_demand) hlsIdle.touch(id);
-      const tokenHls = await securityService.generateStreamToken(req.userId, id, 'm3u8', ttlSec);
-      const sigHls = await securityService.signStreamUrl(tokenHls, expiresMs, id);
-      const qsHls = new URLSearchParams({ token: tokenHls, expires: String(expiresMs), sig: sigHls }).toString();
-      const hlsUrl = `${publicBase}/hls/${id}/index.m3u8?${qsHls}`;
-      const tokenTs = await securityService.generateStreamToken(req.userId, id, 'ts', ttlSec);
-      const sigTs = await securityService.signStreamUrl(tokenTs, expiresMs, id);
-      const qsTs = new URLSearchParams({ token: tokenTs, expires: String(expiresMs), sig: sigTs }).toString();
-      const tsUrl = `${publicBase}/live/${id}.ts?${qsTs}`;
-      const primary = ch.outputFormat === 'mpegts' ? tsUrl : hlsUrl;
-      const shortTsUrl = `${publicBase}/streams/${id}/stream.ts`;
-      const allowShortPreview =
-        (ALLOW_ADMIN_PREVIEW_UNSIGNED_TS || ALLOW_LOCAL_UNSIGNED_TS) &&
-        ch.outputFormat === 'mpegts';
-      const relPath =
-        allowShortPreview && ch.outputFormat === 'mpegts'
-          ? `/streams/${id}/stream.ts`
-          : ch.outputFormat === 'mpegts'
-            ? `/live/${id}.ts`
-            : `/hls/${id}/index.m3u8`;
-      const outputFormat = ch.outputFormat === 'mpegts' ? 'mpegts' : 'hls';
-      const primaryKind = outputFormat === 'mpegts' ? 'ts' : 'hls';
-      return res.json({
-        url: allowShortPreview ? shortTsUrl : primary,
-        urlSigned: primary,
-        relPath,
-        outputFormat,
-        primaryKind,
-        hls: hlsUrl,
-        ts: tsUrl,
-        hlsUrl,
-        tsUrl,
-        expiresInSec: ttlSec,
-        nginx: true,
-      });
-    }
-
-    const ttlLegacy = parseInt(process.env.PLAYBACK_TOKEN_TTL_LEGACY_SEC || '3600', 10) || 3600;
-    const expLegacy = Date.now() + ttlLegacy * 1000;
-    const container = ch.outputFormat === 'hls' ? 'm3u8' : 'ts';
-    if (ch.on_demand && ch.outputFormat === 'hls') hlsIdle.touch(id);
-    const token = await securityService.generateStreamToken(req.userId, id, container, ttlLegacy);
-    const sig = await securityService.signStreamUrl(token, expLegacy, id);
-    const qs = new URLSearchParams({ token, expires: String(expLegacy), sig }).toString();
-    let relPath;
-    if (ch.outputFormat === 'mpegts') {
-      relPath = `/streams/${id}/stream.ts`;
-    } else {
-      const rends = Array.isArray(ch.renditions) && ch.renditions.length ? ch.renditions : ['1080p'];
-      const multi = ch.renditionMode === 'multi' && rends.length > 1;
-      relPath = `/streams/${id}/${multi ? 'master.m3u8' : 'index.m3u8'}`;
-    }
-    const origin = await serverService.resolvePublicStreamOrigin(req, null);
-    const signedUrl = `${origin}${relPath}?${qs}`;
-    const isHls = ch.outputFormat === 'hls';
-    const shortTsUrl = `${origin}/streams/${id}/stream.ts`;
-    const allowShortPreview =
-      (ALLOW_ADMIN_PREVIEW_UNSIGNED_TS || ALLOW_LOCAL_UNSIGNED_TS) &&
-      ch.outputFormat === 'mpegts';
-    const url = allowShortPreview ? shortTsUrl : signedUrl;
-    const relPathOut =
-      allowShortPreview && ch.outputFormat === 'mpegts'
-        ? `/streams/${id}/stream.ts`
-        : relPath;
-    const outputFormat = ch.outputFormat === 'mpegts' ? 'mpegts' : 'hls';
-    const primaryKind = isHls ? 'hls' : 'ts';
-    res.json({
-      url,
-      urlSigned: signedUrl,
-      relPath: relPathOut,
-      outputFormat,
-      primaryKind,
-      hls: isHls ? signedUrl : null,
-      ts: isHls ? null : signedUrl,
-      expiresInSec: ttlLegacy,
-    });
-  } catch (e) {
-    res.status(500).json({ error: e.message || 'playback-url failed' });
-  }
-});
-
-app.get('/api/channels/:id/stability', requireAuth, async (req, res) => {
-  const { id } = req.params;
-  const channel = channels.get(id);
-  if (!channel || channel.userId !== req.userId) {
-    return res.status(404).json({ error: 'Channel not found' });
-  }
-  const health = await dbApi.getChannelHealth(id, req.userId);
-  let meta = channel.stabilityMeta || {};
-  if (health && health.meta_json) {
-    try {
-      meta = JSON.parse(health.meta_json);
-    } catch {
-      meta = channel.stabilityMeta || {};
-    }
-  }
-  res.json({
-    id,
-    stability_score: health ? health.stability_score : channel.stabilityScore || 100,
-    status_text: health ? health.status_text : channel.stabilityStatus || 'Stable',
-    last_checked: health ? health.last_checked : channel.stabilityLastChecked,
-    auto_fix_enabled: !!channel.autoFixEnabled,
-    stability_profile: channel.stabilityProfile || 'off',
-    meta,
-  });
-});
 
 app.post('/api/qoe/report', async (req, res) => {
   const body = req.body || {};
@@ -1754,65 +1962,6 @@ app.post('/api/qoe/report', async (req, res) => {
   res.json({ ok: true, qoe_score: qoe.score, final_score: finalScore });
 });
 
-app.get('/api/channels/:id/qoe/history', requireAuth, async (req, res) => {
-  const { id } = req.params;
-  const channel = channels.get(id);
-  if (!channel || channel.userId !== req.userId) {
-    return res.status(404).json({ error: 'Channel not found' });
-  }
-  const limit = Math.min(200, Math.max(10, parseInt(req.query.limit, 10) || 60));
-  const rows = await dbApi.getQoeHistory(id, req.userId, limit);
-  res.json({ id, items: rows.reverse() });
-});
-
-app.get('/api/channels/:id/qoe/summary', requireAuth, async (req, res) => {
-  const { id } = req.params;
-  const channel = channels.get(id);
-  if (!channel || channel.userId !== req.userId) {
-    return res.status(404).json({ error: 'Channel not found' });
-  }
-  const agg = await dbApi.getQoeAgg(id, req.userId);
-  res.json({
-    id,
-    qoe_score: agg ? agg.qoe_score : channel.qoeScore || 100,
-    final_score: agg ? agg.final_score : channel.finalStabilityScore || channel.stabilityScore || 100,
-    avg_startup_ms: agg ? agg.avg_startup_ms : channel.qoeAvgStartupMs || 0,
-    avg_buffer_ratio: agg ? agg.avg_buffer_ratio : channel.qoeAvgBufferRatio || 0,
-    avg_latency_ms: agg ? agg.avg_latency_ms : channel.qoeAvgLatencyMs || 0,
-    last_qoe_at: agg ? agg.last_qoe_at : channel.qoeLastChecked || null,
-  });
-});
-
-app.post('/api/channels/:id/fix', requireAuth, async (req, res) => {
-  const { id } = req.params;
-  const channel = channels.get(id);
-  if (!channel || channel.userId !== req.userId) {
-    return res.status(404).json({ error: 'Channel not found' });
-  }
-  const result = applyStabilityFix(id, 'degrade', { reason: 'manual' });
-  if (!result.ok) return res.status(400).json({ error: result.error || 'Fix failed' });
-  if (channel.status === 'running') {
-    try {
-      await restartWithSeamlessIfPossible(id, channel);
-    } catch (e) {
-      return res.status(500).json({ error: e.message || 'Restart failed' });
-    }
-  }
-  res.json({ ok: true, id, outputMode: channel.outputMode, stability_profile: channel.stabilityProfile });
-});
-
-app.post('/api/channels/:id/toggle-auto-fix', requireAuth, (req, res) => {
-  const { id } = req.params;
-  const channel = channels.get(id);
-  if (!channel || channel.userId !== req.userId) {
-    return res.status(404).json({ error: 'Channel not found' });
-  }
-  const enabled = req.body && typeof req.body.enabled === 'boolean' ? req.body.enabled : !channel.autoFixEnabled;
-  channel.autoFixEnabled = !!enabled;
-  persistChannel(id);
-  res.json({ ok: true, id, auto_fix_enabled: channel.autoFixEnabled });
-});
-
 app.get('/api/movie-channels', requireAuth, (req, res) => {
   const list = [];
   channels.forEach((ch, id) => {
@@ -1851,7 +2000,7 @@ app.get('/api/input/detect', requireAuth, (req, res) => {
 });
 
 // Probe source (ffprobe) — same headers / DRM as playback
-app.post('/api/probe', requireAuth, (req, res) => {
+app.post('/api/probe', requireAuth, csrfProtection, (req, res) => {
   const body = req.body || {};
   if (!body.mpdUrl) {
     return res.status(400).json({ error: 'mpdUrl is required' });
@@ -1904,7 +2053,7 @@ app.get('/api/settings/ffmpeg-limits', requireAuth, (_req, res) => {
   });
 });
 
-app.put('/api/settings/ffmpeg-limits', requireAuth, (req, res) => {
+app.put('/api/settings/ffmpeg-limits', requireAuth, csrfProtection, (req, res) => {
   const { max_processes } = req.body;
   const val = parseInt(max_processes, 10);
   if (!Number.isFinite(val) || val < 0) {
@@ -1921,271 +2070,24 @@ app.put('/api/settings/ffmpeg-limits', requireAuth, (req, res) => {
 
 // ─── Transcode Profiles API ──────────────────────────────────────────
 
-app.get('/api/transcode-profiles', requireAuth, async (_req, res) => {
-  try {
-    const rows = await dbApi.listTranscodeProfiles();
-    res.json(rows);
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.post('/api/transcode-profiles', requireAuth, async (req, res) => {
-  try {
-    const { name, output_mode, video_encoder, x264_preset, rendition_mode, renditions, audio_bitrate_k, hls_segment_seconds, hls_playlist_size } = req.body;
-    if (!name || !name.trim()) return res.status(400).json({ error: 'name is required' });
-    const result = await dbApi.createTranscodeProfile({ name: name.trim(), output_mode, video_encoder, x264_preset, rendition_mode, renditions, audio_bitrate_k, hls_segment_seconds, hls_playlist_size });
-    res.json({ id: result.insertId, message: 'Profile created' });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.put('/api/transcode-profiles/:id', requireAuth, async (req, res) => {
-  try {
-    const id = parseInt(req.params.id, 10);
-    const existing = await dbApi.getTranscodeProfile(id);
-    if (!existing) return res.status(404).json({ error: 'Profile not found' });
-    await dbApi.updateTranscodeProfile(id, req.body);
-    res.json({ message: 'Profile updated' });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.delete('/api/transcode-profiles/:id', requireAuth, async (req, res) => {
-  try {
-    const id = parseInt(req.params.id, 10);
-    const existing = await dbApi.getTranscodeProfile(id);
-    if (!existing) return res.status(404).json({ error: 'Profile not found' });
-    let inUse = false;
-    channels.forEach((ch) => {
-      if (ch.transcode_profile_id === id) inUse = true;
-    });
-    if (inUse) return res.status(409).json({ error: 'Profile is in use by one or more channels' });
-    await dbApi.deleteTranscodeProfile(id);
-    res.json({ message: 'Profile deleted' });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-// ─── DRM Restream API ────────────────────────────────────────────────
-
-app.get('/api/drm-restreams', requireAuth, (_req, res) => {
-  const list = [];
-  channels.forEach((ch, id) => {
-    if (!isInternalChannel(ch)) return;
-    const broadcast = tsBroadcasts.get(id);
-    const clients = broadcast ? broadcast.consumers.size : 0;
-    const output_url = ch.status === 'running' || ch.status === 'starting'
-      ? `/drm/${id}/stream.ts` : null;
-    list.push({
-      id, name: ch.name || '', status: ch.status || 'stopped',
-      mpdUrl: ch.mpdUrl || '', kid: ch.kid || '', key: ch.key || '',
-      userAgent: ch.userAgent || '', headers: ch.headers || '',
-      transcode_profile_id: ch.transcode_profile_id || null,
-      outputFormat: 'mpegts', output_url, clients,
-      createdAt: ch.createdAt || null,
-    });
-  });
-  res.json(list);
-});
-
-app.post('/api/drm-restreams/parse-preview', requireAuth, async (req, res) => {
-  try {
-    const rawText = req.body && typeof req.body.rawText === 'string' ? req.body.rawText : '';
-    if (!rawText.trim()) return res.status(400).json({ error: 'rawText is required' });
-
-    const parsed = parseExtractionDump(rawText);
-    const mpdUrl = parsed.mpdUrl ? String(parsed.mpdUrl).trim() : '';
-    const kid = parsed.kid ? String(parsed.kid).trim() : '';
-    const key = parsed.key ? String(parsed.key).trim() : '';
-
-    if (!mpdUrl || !kid || !key) {
-      return res.status(400).json({
-        error: 'Could not extract MPD URL, KID, and Key from dump. Make sure it includes a DASH MPD URL plus KID and Key.',
-      });
-    }
-
-    const name = parsed.nameHint ? String(parsed.nameHint).trim() : '';
-
-    let headers = parsed.headers && typeof parsed.headers === 'object' ? { ...parsed.headers } : {};
-    let userAgent = '';
-    Object.keys(headers).forEach((k) => {
-      if (String(k).toLowerCase() === 'user-agent') {
-        userAgent = String(headers[k]);
-        delete headers[k];
-      }
-    });
-
-    res.json({
-      name,
-      mpdUrl,
-      kid,
-      key,
-      userAgent,
-      headers,
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message || 'parse-preview failed' });
-  }
-});
-
-app.post('/api/drm-restreams', requireAuth, async (req, res) => {
-  try {
-    const { name, mpdUrl, kid, key, userAgent, headers } = req.body;
-    if (!name || !name.trim()) return res.status(400).json({ error: 'name is required' });
-    if (!mpdUrl || !mpdUrl.trim()) return res.status(400).json({ error: 'MPD URL is required' });
-    const normKid = normalizeHex32(kid);
-    const normKey = normalizeHex32(key);
-    if (!normKid || !normKey) return res.status(400).json({ error: 'Valid KID and Key (32 hex chars) are required' });
-
-    const id = uuidv4().substring(0, 8);
-    const headersObj = parseHeadersMaybe(headers);
-    const baseChannel = {
-      name: name.trim(),
-      mpdUrl: mpdUrl.trim(),
-      inputType: 'dash',
-      headers: headersObj,
-      kid: normKid,
-      key: normKey,
-      pssh: '',
-      type: 'CLEARKEY',
-      outputMode: 'copy',
-      outputFormat: 'mpegts',
-      userAgent: userAgent || '',
-      referer: '',
-      sourceQueue: [],
-      sourceIndex: 0,
-      channelClass: 'drm',
-      is_internal: true,
-      status: 'stopped',
-      createdAt: new Date().toISOString(),
-      hlsUrl: null,
-      error: null,
-      viewers: 0,
-      startedAt: null,
-      streamMode: 'live',
-      renditionMode: 'single',
-      renditions: ['1080p'],
-      x264Preset: 'veryfast',
-      videoEncoder: 'cpu_x264',
-      audioBitrateK: 128,
-      hlsSegmentSeconds: 4,
-      hlsPlaylistSize: 10,
-      maxRetries: 3,
-      retryDelaySec: 5,
-      gen_timestamps: true,
-      read_native: false,
-      stream_all: false,
-      on_demand: false,
-      stabilityScore: 100,
-      stabilityStatus: 'Stable',
-      stabilityLastChecked: null,
-      stabilityMeta: {},
-      autoFixEnabled: false,
-      stabilityProfile: 'off',
-      performanceProfile: 'balanced',
-      streamSlot: 'a',
-      watermark: { enabled: false },
-      userId: req.userId,
-    };
-
-    const mergeInput = {
-      ...req.body,
-      mpdUrl: mpdUrl.trim(),
-      inputType: 'dash',
-      outputFormat: 'mpegts',
-    };
-    const extra = await mergeChannelOptions(baseChannel, mergeInput);
-    if (extra && extra.outputFormat === 'mpegts' && extra.renditionMode === 'multi') {
-      // MPEG-TS output supports only one program stream.
-      extra.renditionMode = 'single';
-    }
-    const channel = { ...baseChannel, ...extra };
-
-    channels.set(id, channel);
-    await dbApi.insertChannel(id, req.userId, channel);
-
-    const streamDir = path.join(__dirname, 'streams', id);
-    if (!fs.existsSync(streamDir)) fs.mkdirSync(streamDir, { recursive: true });
-
-    res.json({ id, output_url: `/drm/${id}/stream.ts` });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.put('/api/drm-restreams/:id', requireAuth, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const ch = channels.get(id);
-    if (!ch || !isInternalChannel(ch)) return res.status(404).json({ error: 'DRM stream not found' });
-
-    if (ch.status === 'running' || ch.status === 'starting') {
-      stopChannel(id);
-    }
-
-    const { name, mpdUrl, kid, key, userAgent, headers } = req.body;
-    if (name !== undefined) ch.name = String(name).trim();
-    if (mpdUrl !== undefined) ch.mpdUrl = String(mpdUrl).trim();
-    if (kid !== undefined) { const k = normalizeHex32(kid); if (k) ch.kid = k; }
-    if (key !== undefined) { const k = normalizeHex32(key); if (k) ch.key = k; }
-    if (userAgent !== undefined) ch.userAgent = String(userAgent);
-    if (headers !== undefined) ch.headers = parseHeadersMaybe(headers);
-
-    const mergeInput = {
-      ...req.body,
-      mpdUrl: ch.mpdUrl,
-      inputType: 'dash',
-      outputFormat: 'mpegts',
-    };
-    const extra = await mergeChannelOptions(ch, mergeInput);
-    if (extra && extra.outputFormat === 'mpegts' && extra.renditionMode === 'multi') {
-      extra.renditionMode = 'single';
-    }
-    Object.assign(ch, extra);
-
-    await dbApi.updateChannelRow(id, req.userId, ch);
-    res.json({ message: 'DRM stream updated' });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.delete('/api/drm-restreams/:id', requireAuth, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const ch = channels.get(id);
-    if (!ch || !isInternalChannel(ch)) return res.status(404).json({ error: 'DRM stream not found' });
-
-    if (ch.status === 'running' || ch.status === 'starting') {
-      stopChannel(id);
-    }
-    channels.delete(id);
-    await dbApi.deleteChannelRow(id);
-
-    const streamDir = path.join(__dirname, 'streams', id);
-    try { fs.rmSync(streamDir, { recursive: true, force: true }); } catch {}
-
-    res.json({ message: 'DRM stream deleted' });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.post('/api/drm-restreams/:id/start', requireAuth, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const ch = channels.get(id);
-    if (!ch || !isInternalChannel(ch)) return res.status(404).json({ error: 'DRM stream not found' });
-
-    if (ch.status === 'running') {
-      return res.json({ message: 'Already running', output_url: `/drm/${id}/stream.ts` });
-    }
-
-    await startChannel(id, ch);
-    res.json({ message: 'DRM stream started', output_url: `/drm/${id}/stream.ts` });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.post('/api/drm-restreams/:id/stop', requireAuth, (req, res) => {
-  try {
-    const { id } = req.params;
-    const ch = channels.get(id);
-    if (!ch || !isInternalChannel(ch)) return res.status(404).json({ error: 'DRM stream not found' });
-
-    stopChannel(id);
-    res.json({ message: 'DRM stream stopped' });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
+app.use('/api', transcodeRoutes({ requireAuth, dbApi, channels }));
+app.use('/api', drmRoutes({
+  requireAuth,
+  channels,
+  tsBroadcasts,
+  isInternalChannel,
+  parseExtractionDump,
+  normalizeHex32,
+  parseHeadersMaybe,
+  mergeChannelOptions,
+  dbApi,
+  uuidv4,
+  startChannel,
+  stopChannel,
+  rootDir: __dirname,
+  path,
+  fs,
+}));
 
 app.get('/drm/:id/stream.ts', async (req, res) => {
   const id = req.params.id;
@@ -2213,307 +2115,7 @@ app.get('/drm/:id/stream.ts', async (req, res) => {
   });
 });
 
-// Probe a source URL with ffprobe
-app.post('/api/channels/probe-source', requireAuth, async (req, res) => {
-  const { url, user_agent, http_proxy } = req.body;
-  if (!url) return res.status(400).json({ error: 'url is required' });
-  const { spawn } = require('child_process');
-  const probeArgs = ['-v', 'error', '-show_streams', '-show_format', '-of', 'json'];
-  if (http_proxy) probeArgs.push('-http_proxy', http_proxy);
-  if (user_agent) probeArgs.push('-user_agent', user_agent);
-  probeArgs.push('-analyzeduration', '3000000', '-probesize', '3000000', '-i', url);
-  try {
-    const result = await new Promise((resolve, reject) => {
-      const proc = spawn('ffprobe', probeArgs, { timeout: 15000 });
-      let stdout = '', stderr = '';
-      proc.stdout.on('data', d => { stdout += d; });
-      proc.stderr.on('data', d => { stderr += d; });
-      proc.on('close', code => {
-        if (code !== 0) return reject(new Error(stderr || `ffprobe exited with code ${code}`));
-        try { resolve(JSON.parse(stdout)); } catch { reject(new Error('Failed to parse ffprobe output')); }
-      });
-      proc.on('error', reject);
-    });
-    const video = (result.streams || []).find(s => s.codec_type === 'video');
-    const audio = (result.streams || []).find(s => s.codec_type === 'audio');
-    const fmt = result.format || {};
-    res.json({
-      video_codec: video ? video.codec_name : null,
-      audio_codec: audio ? audio.codec_name : null,
-      width: video ? video.width : null,
-      height: video ? video.height : null,
-      fps: video && video.r_frame_rate ? video.r_frame_rate : null,
-      video_bitrate: video ? parseInt(video.bit_rate, 10) || null : null,
-      audio_bitrate: audio ? parseInt(audio.bit_rate, 10) || null : null,
-      bitrate: parseInt(fmt.bit_rate, 10) || null,
-      duration: parseFloat(fmt.duration) || null,
-      format: fmt.format_name || null,
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Add new channel
-app.post('/api/channels', requireAuth, async (req, res) => {
-  const { name, mpdUrl, headers, kid, key, pssh, type } = req.body;
-
-  const queueIn = normalizeSourceQueue(req.body.sourceQueue);
-  const primaryUrl = String(mpdUrl || queueIn[0] || '').trim();
-  if (!name || !primaryUrl) {
-    return res.status(400).json({ error: 'name and at least one input url are required' });
-  }
-
-  const extra = await mergeChannelOptions(null, req.body);
-  const allSources = extra.sourceQueue.length ? extra.sourceQueue : [primaryUrl];
-  const hasDashInput = allSources.some((u) => resolveEffectiveInputType(u, extra.inputType) === 'dash');
-  if (hasDashInput && (!normalizeHex32(kid) || !normalizeHex32(key))) {
-    return res.status(400).json({ error: 'For DASH input(s), kid and key are required (32 hex each)' });
-  }
-
-  const id = uuidv4().substring(0, 8);
-
-  if (extra.watermark.enabled && extra.watermark.file) {
-    const wmPath = path.join(WATERMARKS_DIR, extra.watermark.file);
-    if (!fs.existsSync(wmPath)) {
-      return res.status(400).json({ error: 'Watermark file not found. Upload one or disable watermark.' });
-    }
-  }
-
-  if (extra.outputMode === 'copy' && extra.watermark.enabled) {
-    return res.status(400).json({
-      error: 'Watermark requires transcoding. Set output to Transcode or disable watermark.',
-    });
-  }
-
-  if (mpegtsMultiConflict(extra)) {
-    return res.status(400).json({
-      error: 'MPEG-TS supports one program stream only. Use HLS for multi-bitrate, or single quality + single mode.',
-    });
-  }
-
-  const channel = {
-    name,
-    mpdUrl: primaryUrl,
-    headers: headers || {},
-    kid,
-    key,
-    pssh: pssh || '',
-    type: type || 'WIDEVINE',
-    ...extra,
-    sourceIndex: 0,
-    status: 'stopped',
-    createdAt: new Date().toISOString(),
-    hlsUrl: null,
-    error: null,
-    viewers: 0,
-    startedAt: null,
-    channelClass: 'normal',
-    is_internal: false,
-    stabilityScore: 100,
-    stabilityStatus: 'Stable',
-    stabilityLastChecked: null,
-    stabilityMeta: {},
-    autoFixEnabled: extra.autoFixEnabled || false,
-    stabilityProfile: extra.stabilityProfile || 'off',
-    streamSlot: 'a',
-    qoeScore: 100,
-    qoeLastChecked: null,
-    qoeAvgStartupMs: 0,
-    qoeAvgBufferRatio: 0,
-    qoeAvgLatencyMs: 0,
-    finalStabilityScore: 100,
-    userId: req.userId,
-  };
-
-  channels.set(id, channel);
-  await dbApi.insertChannel(id, req.userId, channel);
-
-  const streamDir = path.join(__dirname, 'streams', id);
-  if (!fs.existsSync(streamDir)) {
-    fs.mkdirSync(streamDir, { recursive: true });
-  }
-
-  const { userId, ...pub } = channel;
-  const bq = req.body && req.body.bouquet_ids;
-  if (Array.isArray(bq)) {
-    try {
-      await bouquetService.syncEntityBouquets('channels', id, bq);
-    } catch (e) {
-      console.error('[bouquet sync]', e.message);
-    }
-  }
-  res.json({ id, ...pub });
-});
-
-// Update channel
-app.put('/api/channels/:id', requireAuth, async (req, res) => {
-  const { id } = req.params;
-  if (!channels.has(id)) {
-    return res.status(404).json({ error: 'Channel not found' });
-  }
-
-  const channel = channels.get(id);
-
-  if (channel.userId !== req.userId) {
-    return res.status(404).json({ error: 'Channel not found' });
-  }
-
-  if (channel.status === 'running') {
-    return res.status(400).json({ error: 'Stop the channel first before editing' });
-  }
-
-  const updates = req.body;
-  const extra = await mergeChannelOptions(channel, updates);
-
-  if (extra.watermark.enabled && extra.watermark.file) {
-    const wmPath = path.join(WATERMARKS_DIR, extra.watermark.file);
-    if (!fs.existsSync(wmPath)) {
-      return res.status(400).json({ error: 'Watermark file not found.' });
-    }
-  }
-
-  if (extra.outputMode === 'copy' && extra.watermark.enabled) {
-    return res.status(400).json({
-      error: 'Watermark requires transcoding. Set output to Transcode or disable watermark.',
-    });
-  }
-
-  if (mpegtsMultiConflict(extra)) {
-    return res.status(400).json({
-      error: 'MPEG-TS supports one program stream only. Use HLS for multi-bitrate, or single quality + single mode.',
-    });
-  }
-
-  const queuePut = extra.sourceQueue.length ? extra.sourceQueue : [updates.mpdUrl || channel.mpdUrl];
-  const mpdUrlFinal = String(updates.mpdUrl || queuePut[0] || channel.mpdUrl || '').trim();
-  const hasDashPut = queuePut.some((u) => resolveEffectiveInputType(u, extra.inputType) === 'dash');
-  const kidPut = updates.kid !== undefined ? updates.kid : channel.kid;
-  const keyPut = updates.key !== undefined ? updates.key : channel.key;
-  if (!mpdUrlFinal) {
-    return res.status(400).json({ error: 'at least one input url is required' });
-  }
-  if (hasDashPut && (!normalizeHex32(kidPut) || !normalizeHex32(keyPut))) {
-    return res.status(400).json({ error: 'For DASH input(s), kid and key are required (32 hex each)' });
-  }
-
-  Object.assign(channel, {
-    name: updates.name || channel.name,
-    mpdUrl: mpdUrlFinal,
-    headers: updates.headers !== undefined ? updates.headers : channel.headers,
-    kid: updates.kid || channel.kid,
-    key: updates.key || channel.key,
-    pssh: updates.pssh !== undefined ? updates.pssh : channel.pssh,
-    type: updates.type || channel.type,
-    ...extra,
-    channelClass: 'normal',
-    sourceIndex: 0,
-  });
-
-  channels.set(id, channel);
-  await dbApi.updateChannelRow(id, req.userId, channel);
-  const bqPut = updates.bouquet_ids;
-  if (bqPut !== undefined) {
-    try {
-      await bouquetService.syncEntityBouquets('channels', id, Array.isArray(bqPut) ? bqPut : []);
-    } catch (e) {
-      console.error('[bouquet sync]', e.message);
-    }
-  }
-  const { userId, ...pub } = channel;
-  res.json({ id, ...pub });
-});
-
-// Delete channel
-app.delete('/api/channels/:id', requireAuth, async (req, res) => {
-  const { id } = req.params;
-  if (!channels.has(id)) {
-    return res.status(404).json({ error: 'Channel not found' });
-  }
-
-  const channel = channels.get(id);
-  if (channel.userId !== req.userId) {
-    return res.status(404).json({ error: 'Channel not found' });
-  }
-
-  stopChannel(id);
-  channels.delete(id);
-  await dbApi.deleteChannelRow(id, req.userId);
-
-  const streamDir = path.join(__dirname, 'streams', id);
-  if (fs.existsSync(streamDir)) {
-    fs.rmSync(streamDir, { recursive: true, force: true });
-  }
-
-  res.json({ success: true });
-});
-
-// Start channel
-app.post('/api/channels/:id/start', requireAuth, async (req, res) => {
-  const { id } = req.params;
-  if (!channels.has(id)) {
-    return res.status(404).json({ error: 'Channel not found' });
-  }
-
-  const channel = channels.get(id);
-
-  if (channel.userId !== req.userId) {
-    return res.status(404).json({ error: 'Channel not found' });
-  }
-
-  if (channel.status === 'running') {
-    return res.json({ message: 'Already running', hlsUrl: channel.hlsUrl });
-  }
-
-  try {
-    await startChannel(id, channel);
-    res.json({ id, status: channel.status, hlsUrl: channel.hlsUrl });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Stop channel
-app.post('/api/channels/:id/stop', requireAuth, (req, res) => {
-  const { id } = req.params;
-  if (!channels.has(id)) {
-    return res.status(404).json({ error: 'Channel not found' });
-  }
-
-  const channel = channels.get(id);
-  if (channel.userId !== req.userId) {
-    return res.status(404).json({ error: 'Channel not found' });
-  }
-
-  stopChannel(id);
-  res.json({ id, status: 'stopped' });
-});
-
-// Restart channel
-app.post('/api/channels/:id/restart', requireAuth, async (req, res) => {
-  const { id } = req.params;
-  if (!channels.has(id)) {
-    return res.status(404).json({ error: 'Channel not found' });
-  }
-
-  const channel = channels.get(id);
-  if (channel.userId !== req.userId) {
-    return res.status(404).json({ error: 'Channel not found' });
-  }
-
-  stopChannel(id);
-
-  await new Promise((resolve) => setTimeout(resolve, 2000));
-
-  try {
-    await startChannel(id, channel);
-    res.json({ id, status: channel.status, hlsUrl: channel.hlsUrl });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/movie-channels', requireAuth, async (req, res) => {
+app.post('/api/movie-channels', requireAuth, csrfProtection, async (req, res) => {
   const name = String(req.body.name || '').trim();
   const urls = normalizeMovieUrls(req.body.urls);
   if (!name || urls.length === 0) {
@@ -2601,7 +2203,7 @@ app.post('/api/movie-channels', requireAuth, async (req, res) => {
   res.json({ id, ...pub });
 });
 
-app.post('/api/movie-channels/import', requireAuth, async (req, res) => {
+app.post('/api/movie-channels/import', requireAuth, csrfProtection, async (req, res) => {
   const parsed = parseM3uMovieImport(req.body && req.body.rawText);
   const urls = normalizeMovieUrls(parsed.urls);
   const name = String((req.body && req.body.name) || parsed.firstName || '').trim();
@@ -2692,7 +2294,7 @@ app.post('/api/movie-channels/import', requireAuth, async (req, res) => {
   res.json({ id, ...pub, importedCount: urls.length });
 });
 
-app.put('/api/movie-channels/:id', requireAuth, async (req, res) => {
+app.put('/api/movie-channels/:id', requireAuth, csrfProtection, async (req, res) => {
   const { id } = req.params;
   const channel = channels.get(id);
   if (!channel || channel.userId !== req.userId || !isMovieChannel(channel)) {
@@ -2731,7 +2333,7 @@ app.put('/api/movie-channels/:id', requireAuth, async (req, res) => {
   res.json({ id, ...pub });
 });
 
-app.delete('/api/movie-channels/:id', requireAuth, async (req, res) => {
+app.delete('/api/movie-channels/:id', requireAuth, csrfProtection, async (req, res) => {
   const { id } = req.params;
   const channel = channels.get(id);
   if (!channel || channel.userId !== req.userId || !isMovieChannel(channel)) {
@@ -2745,7 +2347,7 @@ app.delete('/api/movie-channels/:id', requireAuth, async (req, res) => {
   res.json({ success: true });
 });
 
-app.post('/api/movie-channels/:id/start', requireAuth, async (req, res) => {
+app.post('/api/movie-channels/:id/start', requireAuth, csrfProtection, async (req, res) => {
   const { id } = req.params;
   const channel = channels.get(id);
   if (!channel || channel.userId !== req.userId || !isMovieChannel(channel)) {
@@ -2760,7 +2362,7 @@ app.post('/api/movie-channels/:id/start', requireAuth, async (req, res) => {
   }
 });
 
-app.post('/api/movie-channels/:id/stop', requireAuth, (req, res) => {
+app.post('/api/movie-channels/:id/stop', requireAuth, csrfProtection, (req, res) => {
   const { id } = req.params;
   const channel = channels.get(id);
   if (!channel || channel.userId !== req.userId || !isMovieChannel(channel)) {
@@ -2770,7 +2372,7 @@ app.post('/api/movie-channels/:id/stop', requireAuth, (req, res) => {
   res.json({ id, status: 'stopped' });
 });
 
-app.post('/api/movie-channels/:id/restart', requireAuth, async (req, res) => {
+app.post('/api/movie-channels/:id/restart', requireAuth, csrfProtection, async (req, res) => {
   const { id } = req.params;
   const channel = channels.get(id);
   if (!channel || channel.userId !== req.userId || !isMovieChannel(channel)) {
@@ -2783,26 +2385,6 @@ app.post('/api/movie-channels/:id/restart', requireAuth, async (req, res) => {
     res.json({ id, status: channel.status, hlsUrl: channel.hlsUrl });
   } catch (err) {
     res.status(500).json({ error: err.message });
-  }
-});
-
-// Get channel logs
-app.get('/api/channels/:id/logs', requireAuth, (req, res) => {
-  const { id } = req.params;
-  if (!channels.has(id)) {
-    return res.status(404).json({ error: 'Channel not found' });
-  }
-  if (channels.get(id).userId !== req.userId) {
-    return res.status(404).json({ error: 'Channel not found' });
-  }
-  const logFile = path.join(__dirname, 'logs', `${id}.log`);
-
-  if (fs.existsSync(logFile)) {
-    const logs = fs.readFileSync(logFile, 'utf-8');
-    const lines = logs.split('\n').slice(-100).join('\n');
-    res.json({ logs: lines });
-  } else {
-    res.json({ logs: '' });
   }
 });
 
@@ -2873,6 +2455,16 @@ async function seamlessSwitchChannel(id, channel, newSlot) {
     } catch {}
   }
   return true;
+}
+
+// Local restartChannel using server.js's own stopChannel/startChannel
+// Note: streamManager no longer exports lifecycle functions
+function restartChannel(id) {
+  stopChannel(id);
+  const ch = channels.get(id);
+  if (ch) {
+    startChannel(id, ch);
+  }
 }
 
 async function startChannel(id, channel) {
@@ -3436,7 +3028,8 @@ process.on('unhandledRejection', (reason, promise) => {
 // Xtream-style line streaming (M3U / live / movie / series)
 // ========================
 const streamRoutes = require('./routes/stream');
-app.use(streamRoutes);
+// Apply rate limiting to public playback routes (skip localhost for development)
+app.use(streamLimiter, streamRoutes);
 
 // Mount system routes (health, db-status, agent heartbeat) - after inline routes so they take precedence
 const systemRoutes = require('./routes/system');
@@ -3460,8 +3053,12 @@ async function boot() {
   }
   console.log('[BOOT] MariaDB connected');
 
-  await redis.connect();
-  console.log('[BOOT] Redis connected');
+  const redisOk = await redis.connect();
+  if (redisOk) {
+    console.log('[BOOT] Redis connected');
+  } else {
+    console.warn('[BOOT] Redis connection failed – some features may not work correctly');
+  }
 
   await dbApi.seedDefaults();
   await streamingSettings.refreshStreamingSettings(dbApi);
@@ -3497,6 +3094,12 @@ async function boot() {
   ========================================
     `);
     startCrons();
+
+    // Init Telegram bot (lazy start after crons)
+    setTimeout(() => {
+      const { initBot } = require('./services/telegramBot');
+      initBot().catch(e => console.error('[TELEGRAM] Init error:', e.message));
+    }, 5000);
 
     // Init WebSocket server for real-time dashboard
     const wsServer = createWsServer({

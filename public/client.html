@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NovaStreams — My Account</title>
+  <link rel="stylesheet" href="/css/style.css">
+  <style>
+    :root {
+      --bg-primary: #0f0f1a;
+      --bg-elevated: #1a1a2e;
+      --bg-card: #16162a;
+      --border: rgba(255,255,255,0.08);
+      --text-primary: #e6edf3;
+      --text-secondary: #8b949e;
+      --accent-blue: #6b9ef5;
+      --accent-green: #22c55e;
+      --accent-red: #ef4444;
+      --accent-amber: #f59e0b;
+      --radius: 8px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg-primary); color: var(--text-primary); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; min-height: 100vh; }
+
+    .login-wrapper { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+    .login-box { background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius); padding: 2rem; width: 100%; max-width: 380px; }
+    .login-box h1 { font-size: 1.3rem; font-weight: 700; margin-bottom: 1.5rem; color: var(--text-primary); text-align: center; }
+    .form-group { margin-bottom: 1rem; }
+    .form-group input { width: 100%; padding: 0.65rem 1rem; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; color: var(--text-primary); font-size: 0.9rem; outline: none; transition: border-color 0.2s; }
+    .form-group input:focus { border-color: rgba(107,158,245,0.5); background: rgba(255,255,255,0.08); }
+    .btn { display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; padding: 0.6rem 1.2rem; border-radius: 6px; border: none; font-size: 0.85rem; font-weight: 600; cursor: pointer; transition: all 0.15s; }
+    .btn-primary { background: var(--accent-blue); color: white; }
+    .btn-primary:hover { background: #5a8de8; }
+    .btn-success { background: var(--accent-green); color: white; }
+    .btn-success:hover { background: #16a34a; }
+    .btn-danger { background: rgba(239,68,68,0.15); color: var(--accent-red); border: 1px solid rgba(239,68,68,0.3); }
+    .btn-block { width: 100%; }
+    .text-danger { color: var(--accent-red); font-size: 0.82rem; margin-top: 0.5rem; text-align: center; }
+    .text-muted { color: var(--text-secondary); font-size: 0.82rem; }
+
+    /* Main app */
+    #app-panel { display: none; }
+    .client-header { background: linear-gradient(135deg, #1a1a2e, #16162a); padding: 1rem 1.5rem; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); }
+    .client-brand { font-size: 1rem; font-weight: 700; color: var(--text-primary); }
+    .client-header-right { display: flex; align-items: center; gap: 1rem; }
+    .client-user { font-size: 0.82rem; color: var(--text-secondary); }
+    .client-content { padding: 1.5rem; max-width: 640px; margin: 0 auto; }
+
+    /* Cards */
+    .client-card { background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.25rem; margin-bottom: 1rem; }
+    .client-card-title { font-size: 0.78rem; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 1rem; }
+
+    /* Status grid */
+    .status-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+    .status-item { background: rgba(255,255,255,0.03); border-radius: 6px; padding: 0.75rem; }
+    .status-label { font-size: 0.72rem; color: var(--text-secondary); margin-bottom: 4px; }
+    .status-value { font-size: 1rem; font-weight: 700; }
+    .status-value.ok { color: var(--accent-green); }
+    .status-value.warn { color: var(--accent-amber); }
+    .status-value.error { color: var(--accent-red); }
+
+    /* Buttons row */
+    .btn-row { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-top: 1rem; }
+    .btn-outline { background: rgba(255,255,255,0.05); color: var(--text-primary); border: 1px solid rgba(255,255,255,0.12); padding: 0.6rem 1rem; border-radius: 6px; font-size: 0.82rem; cursor: pointer; transition: all 0.15s; display: inline-flex; align-items: center; gap: 0.4rem; }
+    .btn-outline:hover { background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.2); }
+
+    /* Connections table */
+    .conn-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+    .conn-table th { text-align: left; padding: 0.5rem 0.75rem; color: var(--text-secondary); font-weight: 600; border-bottom: 1px solid var(--border); font-size: 0.72rem; text-transform: uppercase; }
+    .conn-table td { padding: 0.6rem 0.75rem; border-bottom: 1px solid rgba(255,255,255,0.04); }
+    .conn-table tr:last-child td { border-bottom: none; }
+    .conn-badge { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 0.68rem; font-weight: 600; }
+    .conn-badge.active { background: rgba(34,197,94,0.15); color: var(--accent-green); }
+    .conn-badge.expired { background: rgba(139,148,158,0.15); color: var(--text-secondary); }
+
+    /* Password form */
+    .pw-form { display: grid; gap: 0.75rem; }
+    .pw-form input { padding: 0.6rem 0.875rem; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; color: var(--text-primary); font-size: 0.85rem; outline: none; width: 100%; }
+    .pw-form input:focus { border-color: rgba(107,158,245,0.5); }
+    .pw-form label { font-size: 0.78rem; color: var(--text-secondary); }
+
+    /* Toast */
+    #toast { position: fixed; bottom: 1.5rem; right: 1.5rem; background: var(--bg-elevated); border: 1px solid var(--border); padding: 0.75rem 1.25rem; border-radius: 8px; font-size: 0.85rem; opacity: 0; transition: opacity 0.2s; pointer-events: none; z-index: 1000; }
+    #toast.show { opacity: 1; }
+    #toast.success { border-color: rgba(34,197,94,0.5); color: var(--accent-green); }
+    #toast.error { border-color: rgba(239,68,68,0.5); color: var(--accent-red); }
+  </style>
+</head>
+<body>
+
+<div id="app-login" class="login-wrapper">
+  <div class="login-box">
+    <h1>NovaStreams</h1>
+    <form id="loginForm" autocomplete="off">
+      <div class="form-group"><input type="text" id="loginUser" placeholder="Username" required></div>
+      <div class="form-group"><input type="password" id="loginPass" placeholder="Password" required></div>
+      <button type="submit" class="btn btn-primary btn-block">Sign In</button>
+      <p id="loginError" class="text-danger" style="display:none"></p>
+    </form>
+  </div>
+</div>
+
+<div id="app-panel">
+  <header class="client-header">
+    <div class="client-brand">NovaStreams</div>
+    <div class="client-header-right">
+      <span class="client-user" id="headerUsername"></span>
+      <button class="btn-outline" onclick="CLIENT.logout()">Logout</button>
+    </div>
+  </header>
+
+  <div class="client-content">
+    <!-- Account Status -->
+    <div class="client-card">
+      <div class="client-card-title">Account Status</div>
+      <div class="status-grid">
+        <div class="status-item">
+          <div class="status-label">Expiry</div>
+          <div class="status-value" id="statExpiry">—</div>
+        </div>
+        <div class="status-item">
+          <div class="status-label">Status</div>
+          <div class="status-value" id="statStatus">—</div>
+        </div>
+        <div class="status-item">
+          <div class="status-label">Active Connections</div>
+          <div class="status-value" id="statConnections">—</div>
+        </div>
+        <div class="status-item">
+          <div class="status-label">Max Connections</div>
+          <div class="status-value" id="statMaxConn">—</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Downloads -->
+    <div class="client-card">
+      <div class="client-card-title">Downloads</div>
+      <div class="btn-row">
+        <button class="btn btn-success" onclick="CLIENT.downloadPlaylist()">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Download M3U Playlist
+        </button>
+        <button class="btn btn-outline" onclick="CLIENT.downloadEpg()">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+          Download EPG
+        </button>
+      </div>
+      <p class="text-muted" style="margin-top:0.75rem;font-size:0.78rem">Playlist includes live channels and VOD. Use VLC, IPTV Smarters, or any M3U-compatible player.</p>
+    </div>
+
+    <!-- Active Connections -->
+    <div class="client-card">
+      <div class="client-card-title">Active Connections</div>
+      <div id="connectionsLoading" style="color:var(--text-secondary);font-size:0.82rem">Loading...</div>
+      <table class="conn-table" id="connectionsTable" style="display:none">
+        <thead><tr><th>IP Address</th><th>Status</th><th>Started</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <!-- Change Password -->
+    <div class="client-card">
+      <div class="client-card-title">Change Password</div>
+      <div class="pw-form">
+        <div><label>Current Password</label><input type="password" id="pwCurrent" placeholder="Current password"></div>
+        <div><label>New Password</label><input type="password" id="pwNew" placeholder="New password"></div>
+        <div><label>Confirm New Password</label><input type="password" id="pwConfirm" placeholder="Confirm new password"></div>
+        <div><button class="btn btn-primary" onclick="CLIENT.changePassword()">Update Password</button></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+const CLIENT = (() => {
+  const API = '/api/client';
+
+  function esc(s) {
+    if (s == null) return '';
+    const d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+  }
+
+  function toast(msg, type = 'info') {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.className = `show ${type}`;
+    setTimeout(() => el.className = '', 3000);
+  }
+
+  async function apiFetch(path, opts = {}) {
+    const res = await fetch(API + path, {
+      method: opts.method || 'GET',
+      headers: { 'Content-Type': 'application/json', ...opts.headers },
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+      credentials: 'same-origin',
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    return data;
+  }
+
+  async function loadMe() {
+    const data = await apiFetch('/me');
+    document.getElementById('headerUsername').textContent = data.username;
+
+    const expiry = data.exp_date ? new Date(data.exp_date * 1000).toLocaleDateString() : 'Never';
+    const expired = data.expired;
+    const statusEl = document.getElementById('statExpiry');
+    statusEl.textContent = expiry;
+    statusEl.className = `status-value ${expired ? 'error' : 'ok'}`;
+
+    const statusText = data.expired ? 'Expired' : data.enabled ? 'Active' : 'Disabled';
+    const statusColor = data.expired ? 'error' : data.enabled ? 'ok' : 'warn';
+    const statStatus = document.getElementById('statStatus');
+    statStatus.textContent = statusText;
+    statStatus.className = `status-value ${statusColor}`;
+
+    document.getElementById('statConnections').textContent = data.active_connections || 0;
+    document.getElementById('statMaxConn').textContent = data.max_connections || 1;
+
+    loadConnections();
+  }
+
+  async function loadConnections() {
+    const loading = document.getElementById('connectionsLoading');
+    const table = document.getElementById('connectionsTable');
+    try {
+      const data = await apiFetch('/connections');
+      const conns = data.connections || [];
+      if (conns.length === 0) {
+        loading.textContent = 'No active connections';
+        return;
+      }
+      loading.style.display = 'none';
+      table.style.display = 'table';
+      table.querySelector('tbody').innerHTML = conns.map(c => `
+        <tr>
+          <td><code style="font-size:0.82rem">${esc(c.ip || '—')}</code></td>
+          <td><span class="conn-badge ${c.active ? 'active' : 'expired'}">${c.active ? 'Active' : 'Expired'}</span></td>
+          <td>${c.date_start ? new Date(c.date_start * 1000).toLocaleString() : '—'}</td>
+        </tr>`).join('');
+    } catch (e) {
+      loading.textContent = 'Could not load connections';
+    }
+  }
+
+  async function downloadPlaylist() {
+    try {
+      const res = await fetch(API + '/playlist', { credentials: 'same-origin' });
+      if (!res.ok) throw new Error('Download failed');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'playlist.m3u';
+      a.click();
+      URL.revokeObjectURL(url);
+      toast('Playlist downloaded', 'success');
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+  async function downloadEpg() {
+    try {
+      const res = await fetch(API + '/epg', { credentials: 'same-origin' });
+      if (!res.ok) throw new Error('Download failed');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'epg.xml';
+      a.click();
+      URL.revokeObjectURL(url);
+      toast('EPG downloaded', 'success');
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+  async function changePassword() {
+    const cur = document.getElementById('pwCurrent').value;
+    const neu = document.getElementById('pwNew').value;
+    const con = document.getElementById('pwConfirm').value;
+    if (!cur || !neu) return toast('All fields required', 'error');
+    if (neu !== con) return toast('New passwords do not match', 'error');
+    if (neu.length < 4) return toast('Password too short', 'error');
+    try {
+      await apiFetch('/password', { method: 'PUT', body: { current_password: cur, new_password: neu } });
+      toast('Password updated', 'success');
+      document.getElementById('pwCurrent').value = '';
+      document.getElementById('pwNew').value = '';
+      document.getElementById('pwConfirm').value = '';
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+  async function logout() {
+    try {
+      await fetch(API.replace('/client', '/auth/logout'), { method: 'POST', credentials: 'same-origin' });
+    } catch (_) {}
+    location.reload();
+  }
+
+  document.getElementById('loginForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const user = document.getElementById('loginUser').value;
+    const pass = document.getElementById('loginPass').value;
+    const errEl = document.getElementById('loginError');
+    errEl.style.display = 'none';
+    try {
+      const data = await fetch(API + '/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: user, password: pass }),
+        credentials: 'same-origin',
+      }).then(r => r.json());
+      if (data.error) { errEl.textContent = data.error; errEl.style.display = 'block'; return; }
+      document.getElementById('app-login').style.display = 'none';
+      document.getElementById('app-panel').style.display = 'block';
+      loadMe();
+    } catch (e) {
+      errEl.textContent = 'Login failed. Check your credentials.';
+      errEl.style.display = 'block';
+    }
+  });
+
+  // Check if already logged in
+  (async () => {
+    try {
+      await loadMe();
+      document.getElementById('app-login').style.display = 'none';
+      document.getElementById('app-panel').style.display = 'block';
+    } catch (_) {
+      document.getElementById('app-login').style.display = 'flex';
+    }
+  })();
+
+  return { logout, downloadPlaylist, downloadEpg, changePassword };
+})();
+</script>
+</body>
+</html>
