@@ -19,6 +19,7 @@ function securityHeaders(app) {
     fontSrc: ["'self'", 'https://fonts.gstatic.com'],
     objectSrc: ["'none'"],
     frameAncestors: ["'none'"],
+    upgradeInsecureRequests: null,
   };
 
   app.use(
