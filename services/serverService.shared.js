@@ -229,7 +229,7 @@ async function createServer(data) {
       connection_limit_ports, max_conn_per_ip, max_hits_normal_user, max_hits_restreamer,
       whitelist_username, block_user_minutes, auto_restart_mysql,
       isp_enabled, isp_priority, isp_allowed_names, isp_case_sensitive
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (${Array(49).fill('?').join(', ')})`,
     [
       name,
       role,
