@@ -112,7 +112,7 @@ let MAX_FFMPEG_PROCESSES = parseInt(process.env.MAX_FFMPEG_PROCESSES, 10) || 0;
 const STREAMING_MODE = (process.env.STREAMING_MODE || 'node').toLowerCase();
 const IPTV_DISK_ROOT =
   process.env.IPTV_DISK_ROOT || path.join(__dirname, 'iptv-media');
-const sessionStore = new RedisStore({ client: redis.getClient() });
+const sessionStore = new RedisStore({ client: redis.getSessionStoreClient() });
 const sessionMiddleware = session(
   buildSessionOptions({
     sessionSecret: SESSION_SECRET,

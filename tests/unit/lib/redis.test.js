@@ -4,8 +4,10 @@ jest.mock('ioredis', () => {
   return jest.fn().mockImplementation(() => ({
     on: jest.fn(),
     get: jest.fn(),
+    set: jest.fn(),
     setex: jest.fn(),
     del: jest.fn(),
+    mget: jest.fn(),
     sadd: jest.fn(),
     scard: jest.fn(),
     smembers: jest.fn(),
@@ -70,6 +72,25 @@ describe('Redis Module', () => {
     });
   });
 
+  describe('getSessionStoreClient', () => {
+    it('adapts node-redis style set expiration options for connect-redis', async () => {
+      const client = redis.getClient();
+      client.set.mockResolvedValue('OK');
+      const sessionClient = redis.getSessionStoreClient();
+
+      await sessionClient.set('sess:abc', '{"cookie":{}}', {
+        expiration: { type: 'EX', value: 60 },
+      });
+
+      expect(client.set).toHaveBeenCalledWith(
+        'sess:abc',
+        '{"cookie":{}}',
+        'EX',
+        60
+      );
+    });
+  });
+
   describe('cacheGet', () => {
     it('should return parsed JSON from cache', async () => {
       const client = redis.getClient();
@@ -107,7 +128,11 @@ describe('Redis Module', () => {
 
       await redis.cacheSet('test-key', { data: 'value' }, 60);
 
-      expect(client.setex).toHaveBeenCalledWith('test-key', 60, '{"data":"value"}');
+      expect(client.setex).toHaveBeenCalledWith(
+        'test-key',
+        60,
+        '{"data":"value"}'
+      );
     });
 
     it('should use default TTL of 60', async () => {
@@ -116,14 +141,20 @@ describe('Redis Module', () => {
 
       await redis.cacheSet('test-key', { data: 'value' });
 
-      expect(client.setex).toHaveBeenCalledWith('test-key', 60, '{"data":"value"}');
+      expect(client.setex).toHaveBeenCalledWith(
+        'test-key',
+        60,
+        '{"data":"value"}'
+      );
     });
 
     it('should handle errors gracefully', async () => {
       const client = redis.getClient();
       client.setex.mockRejectedValue(new Error('redis error'));
 
-      await expect(redis.cacheSet('test-key', { data: 'value' })).resolves.toBeUndefined();
+      await expect(
+        redis.cacheSet('test-key', { data: 'value' })
+      ).resolves.toBeUndefined();
     });
   });
 
