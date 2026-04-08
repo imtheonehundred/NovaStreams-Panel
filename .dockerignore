@@ -1,0 +1,15 @@
+node_modules
+npm-debug.log*
+.env
+.git
+.gitignore
+coverage
+public/js/dist
+data
+logs
+streams
+artifacts
+watermarks/*.png
+*.db
+*.db-shm
+*.db-wal

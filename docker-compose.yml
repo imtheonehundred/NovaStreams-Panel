@@ -1,0 +1,71 @@
+services:
+  panel:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - '3000:3000'
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DB_HOST: mariadb
+      DB_PORT: 3306
+      DB_NAME: ${DB_NAME:-iptv_panel}
+      DB_USER: ${DB_USER:-iptv}
+      DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      SESSION_SECRET: ${SESSION_SECRET:?Set SESSION_SECRET in .env}
+      LINE_PASSWORD_SECRET: ${LINE_PASSWORD_SECRET:?Set LINE_PASSWORD_SECRET in .env}
+      STREAM_SECRET: ${STREAM_SECRET:?Set STREAM_SECRET in .env}
+      PUBLIC_STREAM_BASE_URL: ${PUBLIC_STREAM_BASE_URL:-http://localhost:3000}
+      STREAMING_MODE: ${STREAMING_MODE:-node}
+      DEFAULT_ADMIN_ACCESS_CODE: ${DEFAULT_ADMIN_ACCESS_CODE:?Set DEFAULT_ADMIN_ACCESS_CODE in .env}
+      DEFAULT_RESELLER_ACCESS_CODE: ${DEFAULT_RESELLER_ACCESS_CODE:?Set DEFAULT_RESELLER_ACCESS_CODE in .env}
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./streams:/app/streams
+      - ./watermarks:/app/watermarks
+
+  mariadb:
+    image: mariadb:11.8
+    restart: unless-stopped
+    environment:
+      MARIADB_DATABASE: ${DB_NAME:-iptv_panel}
+      MARIADB_USER: ${DB_USER:-iptv}
+      MARIADB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?Set MARIADB_ROOT_PASSWORD in .env}
+    ports:
+      - '3306:3306'
+    volumes:
+      - mariadb_data:/var/lib/mysql
+    healthcheck:
+      test: ['CMD', 'healthcheck.sh', '--connect', '--innodb_initialized']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ['redis-server', '--save', '60', '1']
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  mariadb_data:
+  redis_data:

@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NovaStreams — My Account</title>
+  <link rel="stylesheet" href="/css/style.css">
+  <link rel="stylesheet" href="/css/client.css">
+</head>
+<body>
+
+<div id="app-login" class="login-wrapper">
+  <div class="login-box">
+    <h1>NovaStreams</h1>
+    <form id="loginForm" autocomplete="off">
+      <div class="form-group"><input type="text" id="loginUser" placeholder="Username" required></div>
+      <div class="form-group"><input type="password" id="loginPass" placeholder="Password" required></div>
+      <button type="submit" class="btn btn-primary btn-block">Sign In</button>
+      <p id="loginError" class="text-danger" style="display:none"></p>
+    </form>
+  </div>
+</div>
+
+<div id="app-panel" style="display:none">
+  <header class="client-header">
+    <div class="client-brand">NovaStreams</div>
+    <div class="client-header-right">
+      <span class="client-user" id="headerUsername"></span>
+      <button class="btn-outline" data-client-action="logout">Logout</button>
+    </div>
+  </header>
+
+  <div class="client-content">
+    <!-- Account Status -->
+    <div class="client-card">
+      <div class="client-card-title">Account Status</div>
+      <div class="status-grid">
+        <div class="status-item">
+          <div class="status-label">Expiry</div>
+          <div class="status-value" id="statExpiry">—</div>
+        </div>
+        <div class="status-item">
+          <div class="status-label">Status</div>
+          <div class="status-value" id="statStatus">—</div>
+        </div>
+        <div class="status-item">
+          <div class="status-label">Active Connections</div>
+          <div class="status-value" id="statConnections">—</div>
+        </div>
+        <div class="status-item">
+          <div class="status-label">Max Connections</div>
+          <div class="status-value" id="statMaxConn">—</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Downloads -->
+    <div class="client-card">
+      <div class="client-card-title">Downloads</div>
+      <div class="btn-row">
+        <button class="btn btn-success" data-client-action="downloadPlaylist">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Download M3U Playlist
+        </button>
+        <button class="btn btn-outline" data-client-action="downloadEpg">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+          Download EPG
+        </button>
+      </div>
+      <p class="text-muted" style="margin-top:0.75rem;font-size:0.78rem">Playlist includes live channels and VOD. Use VLC, IPTV Smarters, or any M3U-compatible player.</p>
+    </div>
+
+    <!-- Active Connections -->
+    <div class="client-card">
+      <div class="client-card-title">Active Connections</div>
+      <div id="connectionsLoading" style="color:var(--text-secondary);font-size:0.82rem">Loading...</div>
+      <table class="conn-table" id="connectionsTable" style="display:none">
+        <thead><tr><th>IP Address</th><th>Status</th><th>Started</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <!-- Change Password -->
+    <div class="client-card">
+      <div class="client-card-title">Change Password</div>
+      <div class="pw-form">
+        <div><label>Current Password</label><input type="password" id="pwCurrent" placeholder="Current password"></div>
+        <div><label>New Password</label><input type="password" id="pwNew" placeholder="New password"></div>
+        <div><label>Confirm New Password</label><input type="password" id="pwConfirm" placeholder="Confirm new password"></div>
+        <div><button class="btn btn-primary" data-client-action="changePassword">Update Password</button></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<!-- Vite Entry Point (dev) -->
+<script type="module" src="/js/dist/client.js"></script>
+</body>
+</html>
